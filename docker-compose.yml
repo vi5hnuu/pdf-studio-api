@@ -1,0 +1,16 @@
+version: '3.9'
+
+services:
+  pdf-studio_api:
+    build:
+      context: .
+    image: pdf-studio-api
+
+  reverse_proxy:
+    image: nginx:latest
+    volumes:
+      - ./conf.d:/etc/nginx/conf.d
+    depends_on:
+      - pdf-studio_api
+    ports:
+      - "8082:8082"
