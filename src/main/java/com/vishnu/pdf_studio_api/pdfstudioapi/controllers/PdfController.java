@@ -1,10 +1,8 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.controllers;
 
-import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.CompressPdfRequest;
-import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.ImageToPdfRequest;
-import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.PageNumbersRequest;
-import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.PdfToJpgRequest;
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.PdfService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
@@ -91,8 +89,8 @@ public class PdfController {
         return pdfService.unlockPdf(a,multipartFile);
     }
     @PostMapping(value = "/protect-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> protectPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.protectPdf(a,multipartFile);
+    public ResponseEntity<Resource> protectPdf(@Valid() @RequestPart("protect-pdf-info") ProtectPdfRequest ppr, @RequestPart("file") MultipartFile file) throws Exception {
+        return pdfService.protectPdf(ppr.getOutFileName(),ppr.getOwnerPassword(),ppr.getUserPassword(),ppr.getUserAccessPermissions(),file);
     }
     @PostMapping(value = "/organize-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> organizePdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){

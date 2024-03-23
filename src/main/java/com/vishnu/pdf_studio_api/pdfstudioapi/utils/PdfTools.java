@@ -7,6 +7,8 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
+import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
@@ -23,6 +25,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.List;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -61,7 +64,9 @@ public class PdfTools {
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
         document.save(byteArrayOutputStream);
         document.close();
-        return byteArrayOutputStream.toByteArray();
+        final byte[] bytes = byteArrayOutputStream.toByteArray();
+        byteArrayOutputStream.close();
+        return bytes;
     }
 
     public static byte[] pdfToSingleImage(PDDocument document,Direction direction, Quality quality,Integer imageGap) throws IOException {
@@ -81,10 +86,10 @@ public class PdfTools {
             else combinedImage = direction==Direction.VERTICAL ? combineImagesVertically(combinedImage, pageImage,imageGap) : combineImagesHorizontally(combinedImage,pageImage,imageGap);
         }
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-        if(combinedImage==null) return byteArrayOutputStream.toByteArray();
-
-        ImageIO.write(combinedImage,"JPG",byteArrayOutputStream);
-        return byteArrayOutputStream.toByteArray();
+        if(combinedImage!=null)ImageIO.write(combinedImage,"JPG",byteArrayOutputStream);
+        final byte[] bytes = byteArrayOutputStream.toByteArray();
+        byteArrayOutputStream.close();
+        return bytes;
     }
     public static byte[] pdfToImagesZip(PDDocument document,Quality quality) throws IOException {
         if(document==null) throw new IllegalArgumentException("pdf document is required");
@@ -167,7 +172,40 @@ public class PdfTools {
         }
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         document.save(baos);
-        return baos.toByteArray();
+        final byte[] bytes = baos.toByteArray();
+        baos.close();
+        return bytes;
+    }
+
+    public static byte[] protectPdf(PDDocument document,String ownerPassword, String userPassword, Set<UserAccessPermission> userAccessPermissions) throws Exception {
+        if (document.isEncrypted()) throw new Exception("document is already protected.");
+
+        final AccessPermission ap = getUserAccessPermission(userAccessPermissions);
+        final StandardProtectionPolicy spp=new StandardProtectionPolicy(ownerPassword,userPassword,ap);
+        spp.setEncryptionKeyLength(256);
+        document.protect(spp);
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        document.save(baos);
+        final byte[] bytes = baos.toByteArray();
+        baos.close();
+        return bytes;
+    }
+
+    private static AccessPermission getUserAccessPermission(Set<UserAccessPermission> userAccessPermissions) {
+        final AccessPermission ap=new AccessPermission();//default user has owner permission
+        if(!userAccessPermissions.isEmpty()){
+            ap.setCanFillInForm(userAccessPermissions.contains(UserAccessPermission.FILL_IN_FORM));
+            ap.setCanAssembleDocument(userAccessPermissions.contains(UserAccessPermission.ASSEMBLE_DOCUMENT));
+            ap.setCanExtractContent(userAccessPermissions.contains(UserAccessPermission.EXTRACT));
+            ap.setCanModify(userAccessPermissions.contains(UserAccessPermission.MODIFICATION));
+            ap.setCanPrint(userAccessPermissions.contains(UserAccessPermission.PRINT));
+            ap.setCanExtractForAccessibility(userAccessPermissions.contains(UserAccessPermission.EXTRACT_FOR_ACCESSIBILITY));
+            ap.setCanModifyAnnotations(userAccessPermissions.contains(UserAccessPermission.MODIFY_ANNOTATIONS));
+            ap.setCanPrintFaithful(userAccessPermissions.contains(UserAccessPermission.FAITHFUL_PRINT));
+            if(userAccessPermissions.contains(UserAccessPermission.READ_ONLY)) ap.setReadOnly();
+        }
+        return ap;
     }
 
 }
