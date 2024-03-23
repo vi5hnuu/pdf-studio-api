@@ -4,6 +4,7 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.PdfService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.apache.pdfbox.multipdf.PDFMergerUtility;
 import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
@@ -23,8 +24,13 @@ public class PdfController {
     private final PdfService pdfService;
 
     @PostMapping(value = "/merge-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> mergePdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.mergePdf(a,multipartFile);
+    public ResponseEntity<Resource> mergePdf(@RequestPart("merge-pdf-info") MergePdfRequest mpr, @RequestPart("files") List<MultipartFile> files) throws Exception {
+        if (files.size()<2) throw new Exception("atleast 2 files are required to be merged");
+        return pdfService.mergePdf(mpr.getOutFileName(),files);
+    }
+    @PostMapping(value = "/reorder-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> reorderPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
+        return pdfService.reorderPdf(a,multipartFile);
     }
     @PostMapping(value = "/split-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> splitPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){

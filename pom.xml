@@ -70,7 +70,7 @@
 				</configuration>
 			</plugin>
 		</plugins>
-		<finalName>pd-studio-api</finalName>
+		<finalName>pdf-studio-api</finalName>
 	</build>
 
 </project>

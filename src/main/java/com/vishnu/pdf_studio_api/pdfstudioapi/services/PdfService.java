@@ -1,5 +1,6 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.MergePdfRequest;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
@@ -26,7 +27,29 @@ import java.util.Set;
 @Service
 @Slf4j
 public class PdfService {
-    public ResponseEntity<Resource> mergePdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
+    public ResponseEntity<Resource> mergePdf(String outFileName,List<MultipartFile> files) {
+        if (outFileName == null) outFileName = "images-pdf";
+
+        try {
+            final byte[] doc = PdfTools.mergePdf(outFileName,files);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+
+            return ResponseEntity
+                    .status(200)
+                    .headers(headers)
+                    .body(baR);
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> reorderPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
         return ResponseEntity.status(200).body(null);
     }
 

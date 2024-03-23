@@ -3,9 +3,14 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.utils;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.pdfbox.io.MemoryUsageSetting;
+import org.apache.pdfbox.io.RandomAccessStreamCache;
+import org.apache.pdfbox.multipdf.PDFMergerUtility;
+import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.common.PDMetadata;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
 import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
@@ -24,6 +29,7 @@ import java.awt.*;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.util.List;
 import java.util.Set;
@@ -63,7 +69,7 @@ public class PdfTools {
             contentStream.close();
         }
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-        document.save(byteArrayOutputStream);
+        document.save(byteArrayOutputStream, CompressParameters.NO_COMPRESSION);
         document.close();
         final byte[] bytes = byteArrayOutputStream.toByteArray();
         byteArrayOutputStream.close();
@@ -172,7 +178,7 @@ public class PdfTools {
             }
         }
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        document.save(baos);
+        document.save(baos, CompressParameters.NO_COMPRESSION);
         final byte[] bytes = baos.toByteArray();
         baos.close();
         return bytes;
@@ -185,7 +191,7 @@ public class PdfTools {
         document.protect(spp);
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        document.save(baos);
+        document.save(baos, CompressParameters.NO_COMPRESSION);
         final byte[] bytes = baos.toByteArray();
         baos.close();
         return bytes;
@@ -199,7 +205,7 @@ public class PdfTools {
             throw new Exception("you do not have owner permission to unprotect it.");
         }
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        document.save(baos);
+        document.save(baos, CompressParameters.NO_COMPRESSION);
         final byte[] bytes = baos.toByteArray();
         baos.close();
         return bytes;
@@ -219,6 +225,26 @@ public class PdfTools {
             if(userAccessPermissions.contains(UserAccessPermission.READ_ONLY)) ap.setReadOnly();
         }
         return ap;
+    }
+
+    public static byte[] mergePdf(String outputFileName,List<MultipartFile> files) throws Exception {
+        PDFMergerUtility merger = new PDFMergerUtility();
+        merger.setDestinationFileName(outputFileName);
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        merger.setDestinationStream(outputStream);
+        merger.setDocumentMergeMode(PDFMergerUtility.DocumentMergeMode.OPTIMIZE_RESOURCES_MODE);
+        merger.setAcroFormMergeMode(PDFMergerUtility.AcroFormMergeMode.JOIN_FORM_FIELDS_MODE);
+
+        for (MultipartFile file : files) {
+            final File tempFile = File.createTempFile(file.getName(),".pdf");
+            file.transferTo(tempFile);
+            merger.addSource(tempFile);
+        }
+        merger.mergeDocuments(null);
+
+        final byte[] bytes = outputStream.toByteArray();
+        outputStream.close();
+        return bytes;
     }
 
 }
