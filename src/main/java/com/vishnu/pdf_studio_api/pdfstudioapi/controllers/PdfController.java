@@ -1,6 +1,9 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.controllers;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.CompressPdfRequest;
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.ImageToPdfRequest;
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.PageNumbersRequest;
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.PdfToJpgRequest;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.PdfService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.Resource;
@@ -11,6 +14,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/pdf-studio")
@@ -28,7 +33,7 @@ public class PdfController {
     }
     @PostMapping(value = "/compress-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> compressPdf(@RequestPart("compress_info")CompressPdfRequest req, @RequestPart(value = "file") MultipartFile file){
-        return pdfService.compressPdf(req.getOutFileName(),req.getCompressQuality(),file);
+        return pdfService.compressPdf(req.getOutFileName(),req.getLevel(),file);
     }
     @PostMapping(value = "/pdf-to-word",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> pdfToWord(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
@@ -59,16 +64,19 @@ public class PdfController {
         return pdfService.editPdf(a,multipartFile);
     }
     @PostMapping(value = "/pdf-to-jpg",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> pdfToJpg(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.pdfToJpg(a,multipartFile);
+    public ResponseEntity<Resource> pdfToJpg(@RequestPart(value = "pdf-to-jpg-info",required = false) PdfToJpgRequest ptjI, @RequestPart("file") MultipartFile multipartFile){
+        if(ptjI==null) ptjI=new PdfToJpgRequest();
+        return pdfService.pdfToJpg(multipartFile,ptjI.getOutFileName(),ptjI.getQuality(),ptjI.getSingle(),ptjI.getDirection(),ptjI.getImageGap());
     }
     @PostMapping(value = "/image-to-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> imageToPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.imageToPdf(a,multipartFile);
+    public ResponseEntity<Resource> imageToPdf(@RequestPart(value = "image-to-pdf-info",required = false) ImageToPdfRequest itp, @RequestPart("files") List<MultipartFile> files){
+        if(itp==null) itp=new ImageToPdfRequest();
+        return pdfService.imageToPdf(itp.getOutFileName(),files);
     }
     @PostMapping(value = "/page-numbers",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> pageNumbers(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.pageNumbers(a,multipartFile);
+    public ResponseEntity<Resource> pageNumbers(@RequestPart(value = "page-numbers-info",required = false)PageNumbersRequest pnr, @RequestPart("file") MultipartFile file){
+        if(pnr==null) pnr=new PageNumbersRequest();
+        return pdfService.pageNumbers(file,pnr.getOutFileName(),pnr.getVerticalPosition(),pnr.getHorizontalPosition(),pnr.getFromPage(),pnr.getToPage(),pnr.getPageNoType(),pnr.getFillColor(),pnr.getPadding(),pnr.getSize(),pnr.getFontName());
     }
     @PostMapping(value = "/watermark",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> waterMark(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
