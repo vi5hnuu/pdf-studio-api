@@ -178,8 +178,6 @@ public class PdfTools {
     }
 
     public static byte[] protectPdf(PDDocument document,String ownerPassword, String userPassword, Set<UserAccessPermission> userAccessPermissions) throws Exception {
-        if (document.isEncrypted()) throw new Exception("document is already protected.");
-
         final AccessPermission ap = getUserAccessPermission(userAccessPermissions);
         final StandardProtectionPolicy spp=new StandardProtectionPolicy(ownerPassword,userPassword,ap);
         spp.setEncryptionKeyLength(256);

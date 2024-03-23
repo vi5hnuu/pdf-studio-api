@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
+import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.springframework.core.io.ByteArrayResource;
@@ -178,6 +179,8 @@ public class PdfService {
                     .status(200)
                     .headers(headers)
                     .body(baR);
+        }catch (InvalidPasswordException e){
+          throw new RuntimeException("pdf is already protected");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
