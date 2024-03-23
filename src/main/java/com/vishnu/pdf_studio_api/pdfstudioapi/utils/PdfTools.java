@@ -8,6 +8,7 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
+import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
@@ -183,6 +184,20 @@ public class PdfTools {
         spp.setEncryptionKeyLength(256);
         document.protect(spp);
 
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        document.save(baos);
+        final byte[] bytes = baos.toByteArray();
+        baos.close();
+        return bytes;
+    }
+
+    public static byte[] unprotectPdf(PDDocument document) throws Exception {
+        AccessPermission accessPermission = document.getCurrentAccessPermission();
+        if (accessPermission.isOwnerPermission()) {
+            document.setAllSecurityToBeRemoved(true);
+        } else{
+            throw new Exception("you do not have owner permission to unprotect it.");
+        }
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         document.save(baos);
         final byte[] bytes = baos.toByteArray();

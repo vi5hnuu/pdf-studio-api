@@ -4,6 +4,7 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.PdfService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -84,9 +85,9 @@ public class PdfController {
     public ResponseEntity<Resource> rotatePdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
         return pdfService.rotatePdf(a,multipartFile);
     }
-    @PostMapping(value = "/unlock-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> unlockPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.unlockPdf(a,multipartFile);
+    @PostMapping(value = "/unprotect-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> unlockPdf(@Valid() @RequestPart("unprotect-pdf-info") UnlockPdfRequest upr, @RequestPart("file") MultipartFile file) throws InvalidPasswordException {
+        return pdfService.unlockPdf(upr.getOutFileName(),upr.getPassword(),file);
     }
     @PostMapping(value = "/protect-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> protectPdf(@Valid() @RequestPart("protect-pdf-info") ProtectPdfRequest ppr, @RequestPart("file") MultipartFile file) throws Exception {

@@ -158,8 +158,29 @@ public class PdfService {
         return ResponseEntity.status(200).body(null);
     }
 
-    public ResponseEntity<Resource> unlockPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
-        return ResponseEntity.status(200).body(null);
+    public ResponseEntity<Resource> unlockPdf(String outFileName,String password,MultipartFile file) throws InvalidPasswordException {
+        if (outFileName == null) outFileName = file.getName();
+        try (final PDDocument document = Loader.loadPDF(file.getBytes(),password)) {
+            if(!document.isEncrypted()) throw new Exception("pdf is already un-protected");
+
+            final byte[] protectedDocBytes = PdfTools.unprotectPdf(document);
+
+            ByteArrayResource baR = new ByteArrayResource(protectedDocBytes);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(protectedDocBytes.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+
+            return ResponseEntity
+                    .status(200)
+                    .headers(headers)
+                    .body(baR);
+        }catch (InvalidPasswordException e){
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public ResponseEntity<Resource> protectPdf(String outFileName, String ownerPassword, String userPassword, Set<UserAccessPermission> userAccessPermissions, MultipartFile file) {
