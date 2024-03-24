@@ -3,6 +3,7 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.MergePdfRequest;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
+import com.vishnu.pdf_studio_api.pdfstudioapi.model.FilePageOrder;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
@@ -49,8 +50,26 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> reorderPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
-        return ResponseEntity.status(200).body(null);
+    public ResponseEntity<Resource> reorderPdf(String outFileName, List<FilePageOrder> order,List<MultipartFile> files) {
+        if (outFileName == null) outFileName = "reorder-pdf";
+
+        try {
+            final byte[] doc = PdfTools.reorderPdf(files, order);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+
+            return ResponseEntity
+                    .status(200)
+                    .headers(headers)
+                    .body(baR);
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public ResponseEntity<Resource> splitPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {

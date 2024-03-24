@@ -2,7 +2,9 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.utils;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
+import com.vishnu.pdf_studio_api.pdfstudioapi.model.FilePageOrder;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.io.MemoryUsageSetting;
 import org.apache.pdfbox.io.RandomAccessStreamCache;
 import org.apache.pdfbox.multipdf.PDFMergerUtility;
@@ -10,6 +12,7 @@ import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDPageTree;
 import org.apache.pdfbox.pdmodel.common.PDMetadata;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
@@ -31,7 +34,9 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -74,6 +79,37 @@ public class PdfTools {
         final byte[] bytes = byteArrayOutputStream.toByteArray();
         byteArrayOutputStream.close();
         return bytes;
+    }
+
+    public static byte[] reorderPdf(List<MultipartFile> files, List<FilePageOrder> order) throws Exception {
+        Map<String, PDDocument> loadedDocs = new HashMap<>();
+        Map<String, PDPageTree> pageTrees = new HashMap<>();
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
+            for (MultipartFile file : files) {
+                final var loadedDoc = Loader.loadPDF(file.getBytes());
+                loadedDocs.putIfAbsent(file.getOriginalFilename(), loadedDoc);
+                pageTrees.putIfAbsent(file.getOriginalFilename(), loadedDoc.getPages());
+            }
+            for (final FilePageOrder o : order) {
+                final var loadedDocPageTree = pageTrees.get(o.getFileName());
+                if (loadedDocPageTree == null) throw new Exception("order filename do not match with file names");
+                final PDPage page = loadedDocPageTree.get(o.getPageNo());
+                document.addPage(page);
+            }
+
+            document.save(byteArrayOutputStream, CompressParameters.NO_COMPRESSION);
+            final byte[] bytes = byteArrayOutputStream.toByteArray();
+            return bytes;
+        } finally {
+            pageTrees.clear();
+            loadedDocs.forEach((key, value) -> {
+                try {
+                    value.close();
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+        }
     }
 
     public static byte[] pdfToSingleImage(PDDocument document,Direction direction, Quality quality,Integer imageGap) throws IOException {

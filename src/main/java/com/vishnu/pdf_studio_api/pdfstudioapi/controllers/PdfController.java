@@ -5,6 +5,9 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.services.PdfService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.apache.pdfbox.multipdf.PDFMergerUtility;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageTree;
 import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
@@ -29,8 +32,8 @@ public class PdfController {
         return pdfService.mergePdf(mpr.getOutFileName(),files);
     }
     @PostMapping(value = "/reorder-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> reorderPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.reorderPdf(a,multipartFile);
+    public ResponseEntity<Resource> reorderPdf(@Valid() @RequestPart("reorder-pdf-info") ReorderPdfRequest rpr, @RequestPart("files") List<MultipartFile> files){
+        return pdfService.reorderPdf(rpr.getOutFileName(),rpr.getOrder(),files);
     }
     @PostMapping(value = "/split-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> splitPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
