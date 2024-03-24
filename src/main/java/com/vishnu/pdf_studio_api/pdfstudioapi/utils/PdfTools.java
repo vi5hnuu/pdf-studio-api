@@ -2,21 +2,18 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.utils;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
-import com.vishnu.pdf_studio_api.pdfstudioapi.model.FilePageOrder;
+import com.vishnu.pdf_studio_api.pdfstudioapi.model.FilePageOrderModel;
+import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.io.MemoryUsageSetting;
-import org.apache.pdfbox.io.RandomAccessStreamCache;
 import org.apache.pdfbox.multipdf.PDFMergerUtility;
 import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.PDPageTree;
-import org.apache.pdfbox.pdmodel.common.PDMetadata;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
-import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
@@ -24,12 +21,9 @@ import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
-import org.apache.pdfbox.util.Matrix;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.ImageIO;
-import java.awt.*;
-import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -81,7 +75,7 @@ public class PdfTools {
         return bytes;
     }
 
-    public static byte[] reorderPdf(List<MultipartFile> files, List<FilePageOrder> order) throws Exception {
+    public static byte[] reorderPdf(List<MultipartFile> files, List<FilePageOrderModel> order) throws Exception {
         Map<String, PDDocument> loadedDocs = new HashMap<>();
         Map<String, PDPageTree> pageTrees = new HashMap<>();
         try (PDDocument document = new PDDocument(); ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
@@ -90,7 +84,7 @@ public class PdfTools {
                 loadedDocs.putIfAbsent(file.getOriginalFilename(), loadedDoc);
                 pageTrees.putIfAbsent(file.getOriginalFilename(), loadedDoc.getPages());
             }
-            for (final FilePageOrder o : order) {
+            for (final FilePageOrderModel o : order) {
                 final var loadedDocPageTree = pageTrees.get(o.getFileName());
                 if (loadedDocPageTree == null) throw new Exception("order filename do not match with file names");
                 final PDPage page = loadedDocPageTree.get(o.getPageNo());
@@ -134,6 +128,7 @@ public class PdfTools {
         byteArrayOutputStream.close();
         return bytes;
     }
+
     public static byte[] pdfToImagesZip(PDDocument document,Quality quality) throws IOException {
         if(document==null) throw new IllegalArgumentException("pdf document is required");
         if(quality==null) quality=Quality.LOW;
@@ -155,6 +150,75 @@ public class PdfTools {
             zip.finish();
             return zipOutputStream.toByteArray();
         }
+    }
+    public static byte[] splitPdf(String outFileName, SplitType type, Integer fixed, List<RangeModel> ranges,PDDocument document) throws IOException {
+         try(ByteArrayOutputStream zipOutputStream = new ByteArrayOutputStream();
+            ZipOutputStream zip = new ZipOutputStream(zipOutputStream);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+             final PDPageTree pt = document.getPages();
+             if (type.equals(SplitType.FIXED_RANGE)) {
+                 int totalDocs = Math.ceilDiv(document.getNumberOfPages(), fixed);
+                 for (int docNo = 1; docNo <= totalDocs; docNo++) {
+                     final PDDocument docX = new PDDocument();
+                     for (int pNo = (docNo - 1) * fixed; pNo < document.getNumberOfPages() && pNo < docNo * fixed; pNo++) {
+                         docX.addPage(pt.get(pNo));
+                     }
+                     ZipEntry entry = new ZipEntry("range_" + (docNo) + ".pdf");
+                     zip.putNextEntry(entry);
+                     docX.save(baos);
+                     docX.close();
+                     zip.write(baos.toByteArray());
+                     baos.reset();
+                     zip.closeEntry();
+                 }
+                 zip.finish();
+                 return zipOutputStream.toByteArray();
+             }
+             else if(type.equals(SplitType.EXTRACT_ALL_PAGES)){
+                 for(int pNo=0;pNo<document.getNumberOfPages();pNo++){
+                     PDDocument docX = new PDDocument();
+                     docX.addPage(pt.get(pNo));
+                     ZipEntry entry = new ZipEntry("range_" + (pNo + 1) + ".pdf");
+                     zip.putNextEntry(entry);
+                     docX.save(baos);
+                     docX.close();
+                     zip.write(baos.toByteArray());
+                     baos.reset();
+                     zip.closeEntry();
+                 }
+                 zip.finish();
+                 return zipOutputStream.toByteArray();
+             }
+             else if(type.equals(SplitType.SPLIT_BY_RANGE)){
+                 for(int rangeNo=0;rangeNo<ranges.size();rangeNo++){
+                     final var range= ranges.get(rangeNo);
+
+                     PDDocument docX = new PDDocument();
+                     for(int pNo=range.getFrom();pNo<document.getNumberOfPages() && pNo<=range.getTo();pNo++){
+                         docX.addPage(pt.get(pNo));
+                     }
+                     ZipEntry entry = new ZipEntry("range_" + (rangeNo + 1) + ".pdf");
+                     zip.putNextEntry(entry);
+                     docX.save(baos);
+                     docX.close();
+                     zip.write(baos.toByteArray());
+                     baos.reset();
+                     zip.closeEntry();
+                 }
+                 zip.finish();
+                 return zipOutputStream.toByteArray();
+             }else {
+                 for(int rangeNo=0;rangeNo<ranges.size();rangeNo++){
+                     final var range= ranges.get(rangeNo);
+                     for(int pNo=range.getFrom();pNo<document.getNumberOfPages() && pNo<=range.getTo();pNo++){
+                         pt.remove(pNo);
+                     }
+                     document.save(baos);
+                 }
+                 return baos.toByteArray();
+             }
+         }
     }
 
     private static BufferedImage combineImagesVertically(BufferedImage image1, BufferedImage image2,Integer offset) {

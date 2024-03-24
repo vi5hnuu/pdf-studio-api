@@ -1,16 +1,14 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
-import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.MergePdfRequest;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
-import com.vishnu.pdf_studio_api.pdfstudioapi.model.FilePageOrder;
+import com.vishnu.pdf_studio_api.pdfstudioapi.model.FilePageOrderModel;
+import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
 import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
-import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
@@ -50,7 +48,7 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> reorderPdf(String outFileName, List<FilePageOrder> order,List<MultipartFile> files) {
+    public ResponseEntity<Resource> reorderPdf(String outFileName, List<FilePageOrderModel> order, List<MultipartFile> files) {
         if (outFileName == null) outFileName = "reorder-pdf";
 
         try {
@@ -72,8 +70,29 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> splitPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
-        return ResponseEntity.status(200).body(null);
+    public ResponseEntity<Resource> splitPdf(String outFileName, SplitType type, Integer fixed, List<RangeModel> ranges, MultipartFile file) {
+        if(List.of(SplitType.SPLIT_BY_RANGE,SplitType.DELETE_PAGES).contains(type) && (ranges==null || ranges.isEmpty())) throw new IllegalArgumentException("invalid ranges.");
+        if(SplitType.FIXED_RANGE.equals(type) && fixed==null) throw new IllegalArgumentException("invalid fixed value.");
+
+        if (outFileName == null) outFileName = "split-pdf";
+
+        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+            final byte[] doc = PdfTools.splitPdf(outFileName, type, fixed, ranges, document);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.%s", outFileName,type.equals(SplitType.DELETE_PAGES) ? "pdf" : "zip"));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+
+            return ResponseEntity
+                    .status(200)
+                    .headers(headers)
+                    .body(baR);
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public ResponseEntity<Resource> compressPdf(String outFileName, CompressionLevel level, MultipartFile file) {

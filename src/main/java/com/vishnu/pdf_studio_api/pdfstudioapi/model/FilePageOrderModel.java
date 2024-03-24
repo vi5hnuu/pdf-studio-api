@@ -11,7 +11,7 @@ import lombok.Setter;
 @Setter
 @AllArgsConstructor
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-public class FilePageOrder{
+public class FilePageOrderModel {
     @NotBlank(message = "filename cannot be blank") private String fileName;
     private int pageNo;//0 indexed
 }
