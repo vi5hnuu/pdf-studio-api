@@ -19,9 +19,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 @Service
 @Slf4j
@@ -215,8 +220,38 @@ public class PdfService {
         return ResponseEntity.status(200).body(null);
     }
 
-    public ResponseEntity<Resource> rotatePdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
-        return ResponseEntity.status(200).body(null);
+    public ResponseEntity<Resource> rotatePdf(String outFileName,Integer angle,List<Integer> fileAngle,Map<String,List<Integer>> pageAngles,Map<String,String> pageToRotate,Boolean maintainRatio,List<MultipartFile> files) {
+        if (outFileName == null) outFileName = "rotated_files";
+        try(ByteArrayOutputStream zipOutputStream = new ByteArrayOutputStream();
+            ZipOutputStream zip = new ZipOutputStream(zipOutputStream)){
+            for(int fNo=0;fNo<files.size();fNo++){
+                final MultipartFile file=files.get(fNo);
+                try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+                    final var filePages= Arrays.stream(pageToRotate.getOrDefault(file.getOriginalFilename(),"").split(",")).filter(val->!val.isBlank()).map(Integer::valueOf).toList();
+                    final byte[] rotatedPdf = PdfTools.rotatePdf(document,angle,(fileAngle.size()-1>=fNo) ? fileAngle.get(fNo) : null,pageAngles.getOrDefault(file.getOriginalFilename(),null),filePages,maintainRatio);
+                    ZipEntry entry = new ZipEntry(String.format("%s.pdf",outFileName));
+                    zip.putNextEntry(entry);
+                    zip.write(rotatedPdf);
+                    zip.closeEntry();
+                }
+            }
+            zip.finish();
+
+            ByteArrayResource baR = new ByteArrayResource(zipOutputStream.toByteArray());
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.zip", outFileName));
+            headers.setContentLength(baR.contentLength());
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+
+            return ResponseEntity
+                    .status(200)
+                    .headers(headers)
+                    .body(baR);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
     }
 
     public ResponseEntity<Resource> unlockPdf(String outFileName,String password,MultipartFile file) throws InvalidPasswordException {

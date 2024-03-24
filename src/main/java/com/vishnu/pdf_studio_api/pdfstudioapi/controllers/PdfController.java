@@ -4,10 +4,6 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.PdfService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.apache.pdfbox.multipdf.PDFMergerUtility;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.PDPageTree;
 import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
@@ -87,12 +83,12 @@ public class PdfController {
         return pdfService.pageNumbers(file,pnr.getOutFileName(),pnr.getVerticalPosition(),pnr.getHorizontalPosition(),pnr.getFromPage(),pnr.getToPage(),pnr.getPageNoType(),pnr.getFillColor(),pnr.getPadding(),pnr.getSize(),pnr.getFontName());
     }
     @PostMapping(value = "/watermark",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> waterMark(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.waterMark(a,multipartFile);
+    public ResponseEntity<Resource> waterMark(@RequestPart(value = "page-numbers-info",required = false)PageNumbersRequest pnr, @RequestPart MultipartFile multipartFile){
+        return pdfService.waterMark(pnr,multipartFile);
     }
     @PostMapping(value = "/rotate-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> rotatePdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.rotatePdf(a,multipartFile);
+    public ResponseEntity<Resource> rotatePdf(@RequestPart("rotate-pdf-info") RotatePdfRequest rpr, @RequestPart("files") List<MultipartFile> files){
+        return pdfService.rotatePdf(rpr.getOutFileName(),rpr.getAngle(),rpr.getFileAngle(),rpr.getPageAngles(),rpr.getPageNos(),rpr.getMaintainRatio(),files);
     }
     @PostMapping(value = "/unprotect-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> unlockPdf(@Valid() @RequestPart("unprotect-pdf-info") UnlockPdfRequest upr, @RequestPart("file") MultipartFile file) throws InvalidPasswordException {
