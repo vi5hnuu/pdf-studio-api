@@ -39,34 +39,6 @@ public class PdfController {
     public ResponseEntity<Resource> compressPdf(@RequestPart("compress_info")CompressPdfRequest req, @RequestPart(value = "file") MultipartFile file){
         return pdfService.compressPdf(req.getOutFileName(),req.getLevel(),file);
     }
-    @PostMapping(value = "/pdf-to-word",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> pdfToWord(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.pdfToWord(a,multipartFile);
-    }
-    @PostMapping(value = "/pdf-to-powerpoint",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> pdfToPowerPoint(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.pdfToPowerPoint(a,multipartFile);
-    }
-    @PostMapping(value = "/pdf-to-excel",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> pdfToExcel(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.pdfToExcel(a,multipartFile);
-    }
-    @PostMapping(value = "/word-to-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> wordToPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.wordToPdf(a,multipartFile);
-    }
-    @PostMapping(value = "/powerpoint-to-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> powerpointToPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.powerpointToPdf(a,multipartFile);
-    }
-    @PostMapping(value = "/excel-to-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> excelToPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.excelToPdf(a,multipartFile);
-    }
-    @PostMapping(value = "/edit-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> editPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.editPdf(a,multipartFile);
-    }
     @PostMapping(value = "/pdf-to-jpg",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> pdfToJpg(@RequestPart(value = "pdf-to-jpg-info",required = false) PdfToJpgRequest ptjI, @RequestPart("file") MultipartFile multipartFile){
         if(ptjI==null) ptjI=new PdfToJpgRequest();
@@ -97,29 +69,5 @@ public class PdfController {
     @PostMapping(value = "/protect-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> protectPdf(@Valid() @RequestPart("protect-pdf-info") ProtectPdfRequest ppr, @RequestPart("file") MultipartFile file) throws Exception {
         return pdfService.protectPdf(ppr.getOutFileName(),ppr.getOwnerPassword(),ppr.getUserPassword(),ppr.getUserAccessPermissions(),file);
-    }
-    @PostMapping(value = "/organize-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> organizePdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.organizePdf(a,multipartFile);
-    }
-    @PostMapping(value = "/repair-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> repairPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.repairPdf(a,multipartFile);
-    }
-    @PostMapping(value = "/sign-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> signPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.signPdf(a,multipartFile);
-    }
-    @PostMapping(value = "/extract-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> extractTxt(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.extractTxt(a,multipartFile);
-    }
-    @PostMapping(value = "/created-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> createPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.createPdf(a,multipartFile);
-    }
-    @PostMapping(value = "/ocr-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> ocrPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return pdfService.ocrPdf(a,multipartFile);
     }
 }
