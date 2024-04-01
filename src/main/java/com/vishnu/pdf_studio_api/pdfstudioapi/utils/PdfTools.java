@@ -246,12 +246,14 @@ public class PdfTools {
     }
 
     public static byte[] writePageNumbersToPages(PDDocument document, Postion vPos, Postion hPos, Integer fromPage, Integer toPage, PageNoType pageNoType, ColorModel fillColor, Padding padding, Integer size, Standard14Fonts.FontName fontName) throws IOException {
+        final float defaultMargin=3.0f;
         final String toWrite = pageNoType.getType().replace("Y", String.valueOf(document.getNumberOfPages())).replace("_", " ");
         PDFont font = new PDType1Font(fontName); // You can change the font as needed
 
         for (int pNo = fromPage; pNo <= toPage; pNo++) {
             final String text = toWrite.replace("X", String.valueOf(pNo + 1));
-            float textBounds = font.getStringWidth(text) / 1000 * size;
+            float textWidth = font.getStringWidth(text) / 1000 * size;
+            float textHeight = font.getFontDescriptor().getFontBoundingBox().getHeight() / 1000 * size;
 
             PDPage page = document.getPage(pNo);
 
@@ -260,15 +262,15 @@ public class PdfTools {
             float pageHeight = page.getMediaBox().getHeight();
 
             float xCoord = switch (hPos) {
-                case Postion.START -> padding.getLeft() + size;
-                case Postion.CENTER -> Math.max(0, pageWidth / 2 - textBounds / 2.0f);
-                case Postion.END -> Math.max(0, pageWidth - textBounds - padding.getRight());
+                case Postion.START -> padding.getLeft() + defaultMargin;
+                case Postion.CENTER -> Math.max(0, pageWidth / 2 - textWidth / 2.0f);
+                case Postion.END -> Math.max(0, pageWidth - textWidth - padding.getRight()-defaultMargin);
             };
 
             float yCoord = switch (vPos) {
-                case Postion.START -> pageHeight - size - padding.getTop();
-                case Postion.CENTER -> pageHeight / 2;
-                case Postion.END -> padding.getBottom();
+                case Postion.START -> pageHeight - textHeight - padding.getTop()-defaultMargin;
+                case Postion.CENTER -> pageHeight / 2-textHeight/2.0f;
+                case Postion.END -> padding.getBottom()+defaultMargin;
             };
 
             try (PDPageContentStream contentStream = new PDPageContentStream(document, page, PDPageContentStream.AppendMode.APPEND, false, true)) {
