@@ -18,7 +18,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/pdf-studio")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "http://localhost:3000",exposedHeaders = {HttpHeaders.CONTENT_DISPOSITION})
+@CrossOrigin(origins = {"http://localhost:3000","https://pdf-studio-vi.onrender.com"},exposedHeaders = {HttpHeaders.CONTENT_DISPOSITION})
 public class PdfController {
     private final PdfService pdfService;
 
@@ -28,8 +28,8 @@ public class PdfController {
         return pdfService.mergePdf(mpr.getOutFileName(),files);
     }
     @PostMapping(value = "/reorder-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> reorderPdf(@Valid() @RequestPart("reorder-pdf-info") ReorderPdfRequest rpr, @RequestPart("files") List<MultipartFile> files){
-        return pdfService.reorderPdf(rpr.getOutFileName(),rpr.getOrder(),files);
+    public ResponseEntity<Resource> reorderPdf(@Valid() @RequestPart("reorder-pdf-info") ReorderPdfRequest rpr, @RequestPart("file") MultipartFile file){
+        return pdfService.reorderPdf(rpr.getOutFileName(),rpr.getOrder(),file);
     }
     @PostMapping(value = "/split-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> splitPdf(@RequestPart("split-pdf-info") SplitPdfRequest spr, @RequestPart("file") MultipartFile file){
@@ -51,8 +51,8 @@ public class PdfController {
         return pdfService.pageNumbers(file,pnr.getOutFileName(),pnr.getVerticalPosition(),pnr.getHorizontalPosition(),pnr.getFromPage(),pnr.getToPage(),pnr.getPageNoType(),pnr.getFillColor(),pnr.getPadding(),pnr.getSize(),pnr.getFontName());
     }
     @PostMapping(value = "/rotate-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> rotatePdf(@RequestPart("rotate-pdf-info") RotatePdfRequest rpr, @RequestPart("files") List<MultipartFile> files){
-        return pdfService.rotatePdf(rpr.getOutFileName(),rpr.getAngle(),rpr.getFileAngle(),rpr.getPageAngles(),rpr.getPageNos(),rpr.getMaintainRatio(),files);
+    public ResponseEntity<Resource> rotatePdf(@RequestPart("rotate-pdf-info") RotatePdfRequest rpr, @RequestPart("file") MultipartFile file){
+        return pdfService.rotatePdf(rpr.getOutFileName(),rpr.getFileAngle(),rpr.getPageAngles(),rpr.getMaintainRatio(),file);
     }
     @PostMapping(value = "/unprotect-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> unlockPdf(@Valid() @RequestPart("unprotect-pdf-info") UnlockPdfRequest upr, @RequestPart("file") MultipartFile file) throws InvalidPasswordException {

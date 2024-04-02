@@ -14,5 +14,5 @@ import lombok.Setter;
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class UnlockPdfRequest {
     private String outFileName;
-    @NotBlank(message = "password is required") private String password;
+    @NotBlank(message = "password is required") private String password;//must have owner permission to unlock
 }

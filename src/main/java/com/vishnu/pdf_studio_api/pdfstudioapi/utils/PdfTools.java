@@ -2,7 +2,6 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.utils;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
-import com.vishnu.pdf_studio_api.pdfstudioapi.model.FilePageOrderModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
@@ -77,34 +76,19 @@ public class PdfTools {
         return bytes;
     }
 
-    public static byte[] reorderPdf(List<MultipartFile> files, List<FilePageOrderModel> order) throws Exception {
-        Map<String, PDDocument> loadedDocs = new HashMap<>();
-        Map<String, PDPageTree> pageTrees = new HashMap<>();
+    public static byte[] reorderPdf(MultipartFile file, int[] order) throws Exception {
         try (PDDocument document = new PDDocument(); ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
-            for (MultipartFile file : files) {
-                final var loadedDoc = Loader.loadPDF(file.getBytes());
-                loadedDocs.putIfAbsent(file.getOriginalFilename(), loadedDoc);
-                pageTrees.putIfAbsent(file.getOriginalFilename(), loadedDoc.getPages());
-            }
-            for (final FilePageOrderModel o : order) {
-                final var loadedDocPageTree = pageTrees.get(o.getFileName());
-                if (loadedDocPageTree == null) throw new Exception("order filename do not match with file names");
-                final PDPage page = loadedDocPageTree.get(o.getPageNo());
+            final var loadedDoc = Loader.loadPDF(file.getBytes());
+            final PDPageTree pageTree = loadedDoc.getPages();
+
+            for (final int pageIndex : order) {
+                final PDPage page = pageTree.get(pageIndex);
                 document.addPage(page);
             }
 
             document.save(byteArrayOutputStream, CompressParameters.NO_COMPRESSION);
             final byte[] bytes = byteArrayOutputStream.toByteArray();
             return bytes;
-        } finally {
-            pageTrees.clear();
-            loadedDocs.forEach((key, value) -> {
-                try {
-                    value.close();
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
-            });
         }
     }
 
@@ -289,36 +273,22 @@ public class PdfTools {
         return bytes;
     }
 
-    public static byte[] rotatePdf(PDDocument document,Integer globalAngle,Integer fileAngle,List<Integer> pagesAngle,List<Integer> pageToRotate,Boolean maintainRatio) throws IOException {
+    public static byte[] rotatePdf(PDDocument document,Integer fileAngle,Map<Integer,Integer> pagesAngle,Boolean maintainRatio) throws IOException {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             final PDPageTree pt = document.getPages();
-            if (pageToRotate.isEmpty()) {//rotate all
-                for (int pNo = 0; pNo < document.getNumberOfPages(); pNo++) {
-                    final Integer rAngle=getRotateAngle(globalAngle,fileAngle,pagesAngle,pNo);
-                    if(rAngle==null) throw new IllegalArgumentException("invalid rotate angle [provide either global angle,file angle,page angle]");
-                    final var page = pt.get(pNo);
-                    rotatePdfPage(document, page, rAngle,maintainRatio);
-                }
-            } else {//rotate given
-                for (int pNo : pageToRotate) {
-                    final Integer rAngle=getRotateAngle(globalAngle,fileAngle,pagesAngle,pNo);
-                    if(rAngle==null) throw new IllegalArgumentException("invalid rotate angle [provide either global angle,file angle,page angle]");
-                    final var page = pt.get(pNo);
-                    rotatePdfPage(document, page, rAngle,maintainRatio);
-                }
+            for(int pNo=0;pNo<document.getNumberOfPages();pNo++){
+                final Integer rAngle= pagesAngle.getOrDefault(pNo,fileAngle!=null ? fileAngle : 0);
+                final var page = pt.get(pNo);
+                rotatePdfPage(document, page, rAngle,maintainRatio);
             }
+
             document.save(baos, CompressParameters.NO_COMPRESSION);
             return baos.toByteArray();
         }
     }
-    private static Integer getRotateAngle(Integer globalAngle,Integer fileAngle,List<Integer> pagesAngle,int index){
-        if((pagesAngle.size()-1<index || pagesAngle.get(index)==null) && fileAngle==null && globalAngle==null) return null;
-        if((pagesAngle.size()-1>=index && pagesAngle.get(index)!=null)) return pagesAngle.get(index);
-        else if(fileAngle!=null) return fileAngle;
-        else return globalAngle;
-    }
-
     private static void rotatePdfPage(PDDocument document, PDPage page, Integer angle, Boolean maintainRatio) throws IOException {
+        if(angle==null || angle%360==0) return;
+
         try (PDPageContentStream cs = new PDPageContentStream(document, page, PDPageContentStream.AppendMode.PREPEND, false, false)) {
 
             Matrix matrix = Matrix.getRotateInstance(Math.toRadians(angle), 0, 0);

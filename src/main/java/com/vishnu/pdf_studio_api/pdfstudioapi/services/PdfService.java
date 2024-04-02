@@ -2,7 +2,6 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
-import com.vishnu.pdf_studio_api.pdfstudioapi.model.FilePageOrderModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
 import lombok.extern.slf4j.Slf4j;
@@ -53,11 +52,11 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> reorderPdf(String outFileName, List<FilePageOrderModel> order, List<MultipartFile> files) {
+    public ResponseEntity<Resource> reorderPdf(String outFileName, int[] order, MultipartFile file) {
         if (outFileName == null) outFileName = "reorder-pdf";
 
         try {
-            final byte[] doc = PdfTools.reorderPdf(files, order);
+            final byte[] doc = PdfTools.reorderPdf(file, order);
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
@@ -220,27 +219,16 @@ public class PdfService {
         return ResponseEntity.status(200).body(null);
     }
 
-    public ResponseEntity<Resource> rotatePdf(String outFileName,Integer angle,List<Integer> fileAngle,Map<String,List<Integer>> pageAngles,Map<String,String> pageToRotate,Boolean maintainRatio,List<MultipartFile> files) {
-        if (outFileName == null) outFileName = "rotated_files";
-        try(ByteArrayOutputStream zipOutputStream = new ByteArrayOutputStream();
-            ZipOutputStream zip = new ZipOutputStream(zipOutputStream)){
-            for(int fNo=0;fNo<files.size();fNo++){
-                final MultipartFile file=files.get(fNo);
-                try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
-                    final var filePages= Arrays.stream(pageToRotate.getOrDefault(file.getOriginalFilename(),"").split(",")).filter(val->!val.isBlank()).map(Integer::valueOf).toList();
-                    final byte[] rotatedPdf = PdfTools.rotatePdf(document,angle,(fileAngle.size()-1>=fNo) ? fileAngle.get(fNo) : null,pageAngles.getOrDefault(file.getOriginalFilename(),null),filePages,maintainRatio);
-                    ZipEntry entry = new ZipEntry(String.format("%s.pdf",outFileName));
-                    zip.putNextEntry(entry);
-                    zip.write(rotatedPdf);
-                    zip.closeEntry();
-                }
-            }
-            zip.finish();
+    public ResponseEntity<Resource> rotatePdf(String outFileName,Integer fileAngle,Map<Integer,Integer> pageAngles,Boolean maintainRatio,MultipartFile file) {
+        if (outFileName == null) outFileName = "rotated_file";
+        try(ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+            final PDDocument document = Loader.loadPDF(file.getBytes())){
+            final byte[] rotatedPdf = PdfTools.rotatePdf(document,fileAngle,pageAngles,maintainRatio);
 
-            ByteArrayResource baR = new ByteArrayResource(zipOutputStream.toByteArray());
+            ByteArrayResource baR = new ByteArrayResource(rotatedPdf);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.zip", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
             headers.setContentLength(baR.contentLength());
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 
