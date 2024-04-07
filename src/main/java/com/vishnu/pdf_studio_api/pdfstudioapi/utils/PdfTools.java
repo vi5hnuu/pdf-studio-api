@@ -29,10 +29,8 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
-import java.util.HashMap;
+import java.util.*;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -195,13 +193,17 @@ public class PdfTools {
                 zip.finish();
                 return zipOutputStream.toByteArray();
             } else {
+                final var pagesToRemove= new ArrayList<PDPage>();
                 for (int rangeNo = 0; rangeNo < ranges.size(); rangeNo++) {
                     final var range = ranges.get(rangeNo);
                     for (int pNo = range.getFrom(); pNo < document.getNumberOfPages() && pNo <= range.getTo(); pNo++) {
-                        pt.remove(pNo);
+                        pagesToRemove.add(pt.get(pNo));
                     }
-                    document.save(baos);
                 }
+                for(final var page : pagesToRemove){
+                    document.removePage(page);
+                }
+                document.save(baos);
                 return baos.toByteArray();
             }
         }

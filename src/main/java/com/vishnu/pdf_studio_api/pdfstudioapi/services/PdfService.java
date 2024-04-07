@@ -31,7 +31,7 @@ import java.util.zip.ZipOutputStream;
 @Slf4j
 public class PdfService {
     public ResponseEntity<Resource> mergePdf(String outFileName,List<MultipartFile> files) {
-        if (outFileName == null) outFileName = "images-pdf";
+        if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "images-pdf";
 
         try {
             final byte[] doc = PdfTools.mergePdf(outFileName,files);
@@ -53,7 +53,7 @@ public class PdfService {
     }
 
     public ResponseEntity<Resource> reorderPdf(String outFileName, int[] order, MultipartFile file) {
-        if (outFileName == null) outFileName = "reorder-pdf";
+        if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "reorder-pdf";
 
         try {
             final byte[] doc = PdfTools.reorderPdf(file, order);
@@ -78,7 +78,7 @@ public class PdfService {
         if(List.of(SplitType.SPLIT_BY_RANGE,SplitType.DELETE_PAGES).contains(type) && (ranges==null || ranges.isEmpty())) throw new IllegalArgumentException("invalid ranges.");
         if(SplitType.FIXED_RANGE.equals(type) && fixed==null) throw new IllegalArgumentException("invalid fixed value.");
 
-        if (outFileName == null) outFileName = "split-pdf";
+        if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "split-pdf";
 
         try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
             final byte[] doc = PdfTools.splitPdf(outFileName, type, fixed, ranges, document);
@@ -139,7 +139,7 @@ public class PdfService {
     public ResponseEntity<Resource> pdfToJpg(MultipartFile file, String outFileName, Quality quality, Boolean single, Direction direction, Integer imageGap) {
         if (file == null) throw new IllegalArgumentException("pdf document is required");
 
-        if (outFileName == null) outFileName = file.getOriginalFilename();
+        if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = file.getOriginalFilename();
         if (single == null) single = true;
         if (direction == null) direction = Direction.VERTICAL;
         if (quality == null) quality = Quality.LOW;
@@ -169,7 +169,7 @@ public class PdfService {
 
     public ResponseEntity<Resource> imageToPdf(String outFileName, List<MultipartFile> files) {
         if (files.isEmpty()) throw new IllegalArgumentException("files cannot be empty");
-        if (outFileName == null) outFileName = "images-pdf";
+        if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "images-pdf";
 
         try {
             final byte[] doc = PdfTools.imagesToPdf(files);
@@ -191,7 +191,7 @@ public class PdfService {
     }
 
     public ResponseEntity<Resource> pageNumbers(MultipartFile file, String outFileName, Postion vPos, Postion hPos, Integer fromPage, Integer toPage, PageNoType pageNoType, ColorModel fillColor, Padding padding, Integer size, Standard14Fonts.FontName fontName) {
-        if (outFileName == null) outFileName = file.getName();
+        if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = file.getName();
 
         try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
             if (toPage == null) toPage = document.getNumberOfPages() - 1;
@@ -220,7 +220,7 @@ public class PdfService {
     }
 
     public ResponseEntity<Resource> rotatePdf(String outFileName,Integer fileAngle,Map<Integer,Integer> pageAngles,Boolean maintainRatio,MultipartFile file) {
-        if (outFileName == null) outFileName = "rotated_file";
+        if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "rotated_file";
         try(ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
             final PDDocument document = Loader.loadPDF(file.getBytes())){
             final byte[] rotatedPdf = PdfTools.rotatePdf(document,fileAngle,pageAngles,maintainRatio);
@@ -243,7 +243,7 @@ public class PdfService {
     }
 
     public ResponseEntity<Resource> unlockPdf(String outFileName,String password,MultipartFile file) throws InvalidPasswordException {
-        if (outFileName == null) outFileName = file.getName();
+        if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = file.getName();
         try (final PDDocument document = Loader.loadPDF(file.getBytes(),password)) {
             if(!document.isEncrypted()) throw new Exception("pdf is already un-protected");
 
@@ -268,7 +268,7 @@ public class PdfService {
     }
 
     public ResponseEntity<Resource> protectPdf(String outFileName, String ownerPassword, String userPassword, Set<UserAccessPermission> userAccessPermissions, MultipartFile file) {
-        if (outFileName == null) outFileName = file.getName();
+        if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = file.getName();
 
         try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
             final byte[] protectedDocBytes = PdfTools.protectPdf(document, ownerPassword, userPassword, userAccessPermissions);
