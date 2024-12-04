@@ -1,5 +1,7 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.enums;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonValue;
 import lombok.Getter;
 
 
@@ -13,5 +15,20 @@ public enum PageNoType {
 
     PageNoType(String type){
         this.type=type;
+    }
+
+
+    @JsonCreator
+    public static PageNoType fromType(String type) {
+        for (PageNoType pageNoType : PageNoType.values()) {
+            if (!pageNoType.type.equalsIgnoreCase(type)) continue;
+            return pageNoType;
+        }
+        throw new IllegalArgumentException("No PageNoType found for type: " + type);
+    }
+
+    @JsonValue
+    public String toValue() {
+        return this.type;
     }
 }

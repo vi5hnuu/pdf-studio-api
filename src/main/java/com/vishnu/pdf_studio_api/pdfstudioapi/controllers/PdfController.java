@@ -1,10 +1,13 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.controllers;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.*;
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.Direction;
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.Quality;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.PdfService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -12,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.Arrays;
 import java.util.List;
 
 
@@ -23,32 +27,30 @@ public class PdfController {
     private final PdfService pdfService;
 
     @PostMapping(value = "/merge-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> mergePdf(@RequestPart("merge-pdf-info") MergePdfRequest mpr, @RequestPart("files") List<MultipartFile> files) throws Exception {
+    public ResponseEntity<Resource> mergePdf(@RequestPart("out_file_name") String outFileName, @RequestPart("files") List<MultipartFile> files) throws Exception {
         if (files.size()<2) throw new Exception("atleast 2 files are required to be merged");
-        return pdfService.mergePdf(mpr.getOutFileName(),files);
+        return pdfService.mergePdf(outFileName,files);
     }
     @PostMapping(value = "/reorder-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> reorderPdf(@Valid() @RequestPart("reorder-pdf-info") ReorderPdfRequest rpr, @RequestPart("file") MultipartFile file){
-        return pdfService.reorderPdf(rpr.getOutFileName(),rpr.getOrder(),file);
+    public ResponseEntity<Resource> reorderPdf(@RequestPart("out_file_name") String outFileName,@RequestPart("order") String order, @RequestPart("file") MultipartFile file){
+        return pdfService.reorderPdf(outFileName,Arrays.stream(order.split(",")).mapToInt(Integer::parseInt).toArray(),file);
     }
     @PostMapping(value = "/split-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> splitPdf(@RequestPart("split-pdf-info") SplitPdfRequest spr, @RequestPart("file") MultipartFile file){
         return pdfService.splitPdf(spr.getOutFileName(),spr.getType(),spr.getFixed(),spr.getRanges(),file);
     }
     @PostMapping(value = "/pdf-to-jpg",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> pdfToJpg(@RequestPart(value = "pdf-to-jpg-info",required = false) PdfToJpgRequest ptjI, @RequestPart("file") MultipartFile multipartFile){
-        if(ptjI==null) ptjI=new PdfToJpgRequest();
-        return pdfService.pdfToJpg(multipartFile,ptjI.getOutFileName(),ptjI.getQuality(),ptjI.getSingle(),ptjI.getDirection(),ptjI.getImageGap());
+    public ResponseEntity<Resource> pdfToJpg(@RequestPart("file") MultipartFile file,
+                                             @Valid @RequestPart("meta") PdfToJpgRequest pdfToJpgRequest){
+        return pdfService.pdfToJpg(file,pdfToJpgRequest.getOutFileName(),pdfToJpgRequest.getQuality(),pdfToJpgRequest.getSingle(),pdfToJpgRequest.getDirection(),pdfToJpgRequest.getImageGap());
     }
     @PostMapping(value = "/image-to-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> imageToPdf(@RequestPart(value = "image-to-pdf-info",required = false) ImageToPdfRequest itp, @RequestPart("files") List<MultipartFile> files){
-        if(itp==null) itp=new ImageToPdfRequest();
-        return pdfService.imageToPdf(itp.getOutFileName(),files);
+    public ResponseEntity<Resource> imageToPdf(@RequestPart(value = "out_file_name",required = false) String outFileName, @RequestPart("files") List<MultipartFile> files){
+        return pdfService.imageToPdf(outFileName,files);
     }
     @PostMapping(value = "/page-numbers",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> pageNumbers(@RequestPart(value = "page-numbers-info",required = false)PageNumbersRequest pnr, @RequestPart("file") MultipartFile file){
-        if(pnr==null) pnr=new PageNumbersRequest();
-        return pdfService.pageNumbers(file,pnr.getOutFileName(),pnr.getVerticalPosition(),pnr.getHorizontalPosition(),pnr.getFromPage(),pnr.getToPage(),pnr.getPageNoType(),pnr.getFillColor(),pnr.getPadding(),pnr.getSize(),pnr.getFontName());
+    public ResponseEntity<Resource> pageNumbers(@RequestPart(value = "page-numbers-config")PageNumbersRequest pnr, @RequestPart("file") MultipartFile file){
+        return pdfService.pageNumbers(file,pnr.getOutFileName(),pnr.getVerticalPosition(),pnr.getHorizontalPosition(),pnr.getFromPage(),pnr.getToPage(),pnr.getPageNoType(),pnr.getFillColor(),pnr.getPadding(),pnr.getSize(), Standard14Fonts.FontName.valueOf(pnr.getFontName()));
     }
     @PostMapping(value = "/rotate-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> rotatePdf(@RequestPart("rotate-pdf-info") RotatePdfRequest rpr, @RequestPart("file") MultipartFile file){

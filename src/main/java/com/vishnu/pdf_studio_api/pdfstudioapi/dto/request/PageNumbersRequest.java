@@ -7,10 +7,7 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.enums.Padding;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageNoType;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.Postion;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
-import jakarta.validation.constraints.AssertTrue;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
-import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.*;
 import lombok.*;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.graphics.color.PDColor;
@@ -23,15 +20,15 @@ import java.util.List;
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class PageNumbersRequest {
     private String outFileName;
-    private PageNoType pageNoType;
+    @NonNull private PageNoType pageNoType;
     private Integer size;//14 default
-    private ColorModel fillColor;
-    private Postion verticalPosition;
-    private Postion horizontalPosition;
+    @NotNull private ColorModel fillColor;
+    @NotNull private Postion verticalPosition;
+    @NotNull private Postion horizontalPosition;
     private Padding padding; //default 0
     private Integer fromPage; //default 0
     private Integer toPage; //default lengthOfPDF
-    private Standard14Fonts.FontName fontName;
+    @NotNull private String fontName;
 
     public PageNumbersRequest(PageNoType pageNoType,Integer size, ColorModel fillColor, Postion verticalPosition, Postion horizontalPosition, Padding padding, Integer fromPage, Integer toPage, Standard14Fonts.FontName fontName) {
         this.pageNoType = pageNoType!=null ? pageNoType : PageNoType.ONLY_X;
@@ -42,7 +39,7 @@ public class PageNumbersRequest {
         this.padding = padding!=null ? padding : new Padding();
         this.fromPage = (fromPage != null) ? fromPage : 0;
         this.toPage = toPage;
-        this.fontName=fontName!=null ? fontName : Standard14Fonts.FontName.COURIER;
+        this.fontName=fontName!=null ? fontName.getName() : Standard14Fonts.FontName.COURIER.getName();
     }
     public PageNumbersRequest() {
         this.pageNoType =PageNoType.ONLY_X;
@@ -53,6 +50,6 @@ public class PageNumbersRequest {
         this.padding =new Padding();
         this.fromPage = 0;
         this.toPage = null;
-        this.fontName=Standard14Fonts.FontName.COURIER;
+        this.fontName=Standard14Fonts.FontName.COURIER.getName();
     }
 }

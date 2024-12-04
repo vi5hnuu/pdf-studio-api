@@ -8,6 +8,7 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.enums.Quality;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
+import org.springframework.web.multipart.MultipartFile;
 
 @Getter
 @Setter
