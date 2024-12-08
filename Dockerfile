@@ -20,7 +20,7 @@ COPY src src
 # Build the application
 RUN ./mvnw package -DskipTests
 
-EXPOSE 8082
+EXPOSE 9991
 
 # Specify the command to run your application
 CMD ["java", "-jar", "target/pdf-studio-api.jar"]
