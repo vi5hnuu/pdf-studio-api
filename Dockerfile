@@ -1,73 +1,32 @@
-FROM openjdk:21
+# -------------------------
+# Stage 1: Build
+# -------------------------
+FROM maven:3.9.9-eclipse-temurin-21 AS build
 
-# Set the working directory inside the container
-WORKDIR /pdf-studio-api
+WORKDIR /app
 
-COPY mvnw.cmd .
-COPY mvnw .
-COPY .mvn .mvn
+# Copy pom.xml first (cache-friendly)
 COPY pom.xml .
 
-# give execute permisson to mvnw on linux
-RUN chmod +x mvnw
+# Download dependencies
+RUN mvn dependency:go-offline
 
-# Download the dependencies
-RUN ./mvnw dependency:go-offline
-
-# Copy the application source code
+# Copy source code
 COPY src src
 
-# Build the application
-RUN ./mvnw package -DskipTests
+# Build application
+RUN mvn package -DskipTests
+
+
+# -------------------------
+# Stage 2: Runtime
+# -------------------------
+FROM eclipse-temurin:21-jre-jammy
+
+WORKDIR /app
+
+COPY --from=build /app/target/pdf-studio-api.jar app.jar
 
 EXPOSE 8082
 
-# Specify the command to run your application
-CMD ["java", "-jar", "target/pdf-studio-api.jar"]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+CMD ["java", "-jar", "app.jar"]
