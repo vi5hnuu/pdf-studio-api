@@ -1,33 +1,40 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.configuration;
 
+import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
-import org.springframework.web.cors.CorsConfiguration;
-import org.springframework.web.cors.CorsConfigurationSource;
-import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import java.util.Arrays;
-import java.util.List;
 
-@RequiredArgsConstructor
 @Configuration
-public class CorsConfig {
+@RequiredArgsConstructor
+public class CorsConfig implements WebMvcConfigurer {
+
     private final Environment environment;
 
-    @Bean
-    public CorsConfigurationSource corsConfigurationSource(){
-        CorsConfiguration configuration=new CorsConfiguration();
+    @Override
+    public void addCorsMappings(@NonNull CorsRegistry registry) {
 
-        if(Arrays.asList(environment.getActiveProfiles()).contains("dev")) configuration.setAllowedOrigins(List.of("http://localhost:4200","http://10.120.240.148:4200"));
-        else configuration.setAllowedOrigins(List.of("https://pdf-studio.laxmi.solutions/"));
-        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS","PATCH"));
-        configuration.setAllowedHeaders(List.of("*"));
-        configuration.setAllowCredentials(false); // Important if using authentication
+        String[] allowedOrigins;
 
-        UrlBasedCorsConfigurationSource source=new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**",configuration);
-        return source;
+        if (Arrays.asList(environment.getActiveProfiles()).contains("dev")) {
+            allowedOrigins = new String[]{
+                    "http://localhost:4200",
+            };
+        } else {
+            allowedOrigins = new String[]{
+                    "https://pdf-studio.laxmi.solutions"
+            };
+        }
+
+        registry.addMapping("/**")
+                .allowedOrigins(allowedOrigins)
+                .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
+                .allowedHeaders("*")
+                .allowCredentials(false)
+                .maxAge(3600);
     }
 }
