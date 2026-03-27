@@ -22,11 +22,12 @@ public class CorsConfig implements WebMvcConfigurer {
 
         if (Arrays.asList(environment.getActiveProfiles()).contains("dev")) {
             allowedOrigins = new String[]{
-                    "http://localhost:4200",
+                    "http://localhost:3000",
             };
         } else {
             allowedOrigins = new String[]{
-                    "https://pdf-studio.laxmi.solutions"
+                    "https://pdf-studio.laxmi.solutions",
+                    "https://pdf-studio-vi.onrender.com"
             };
         }
 
