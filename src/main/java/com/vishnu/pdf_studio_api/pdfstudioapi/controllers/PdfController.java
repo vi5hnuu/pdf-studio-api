@@ -19,7 +19,6 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/pdf-studio")
 @RequiredArgsConstructor
-@CrossOrigin(origins = {"https://pdf-studio-vi.onrender.com"},exposedHeaders = {HttpHeaders.CONTENT_DISPOSITION})
 public class PdfController {
     private final PdfService pdfService;
 

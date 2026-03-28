@@ -120,40 +120,28 @@ public class PdfTools {
     }
 
     public static byte[] grayscalePdf(byte[] fileBytes) throws IOException {
-        try (PDDocument document = Loader.loadPDF(fileBytes);
+        try (PDDocument source = Loader.loadPDF(fileBytes);
+             PDDocument output = new PDDocument();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
-            for (int i = 0; i < document.getNumberOfPages(); i++) {
-                grayscaleImagesOnPage(document.getPage(i), document);
+            PDFRenderer renderer = new PDFRenderer(source);
+
+            for (int i = 0; i < source.getNumberOfPages(); i++) {
+                PDRectangle mediaBox = source.getPage(i).getMediaBox();
+
+                BufferedImage pageImage = renderer.renderImageWithDPI(i, 150, ImageType.GRAY);
+
+                PDPage newPage = new PDPage(new PDRectangle(mediaBox.getWidth(), mediaBox.getHeight()));
+                output.addPage(newPage);
+
+                PDImageXObject pdImage = LosslessFactory.createFromImage(output, pageImage);
+                try (PDPageContentStream cs = new PDPageContentStream(output, newPage)) {
+                    cs.drawImage(pdImage, 0, 0, mediaBox.getWidth(), mediaBox.getHeight());
+                }
             }
 
-            document.save(baos, CompressParameters.NO_COMPRESSION);
+            output.save(baos, CompressParameters.NO_COMPRESSION);
             return baos.toByteArray();
-        }
-    }
-
-    private static void grayscaleImagesOnPage(PDPage page, PDDocument document) throws IOException {
-        PDResources resources = page.getResources();
-        if (resources == null) return;
-
-        COSDictionary xobjectDict = resources.getCOSObject().getCOSDictionary(COSName.XOBJECT);
-        if (xobjectDict == null) return;
-
-        for (COSName name : resources.getXObjectNames()) {
-            PDXObject xObject;
-            try { xObject = resources.getXObject(name); } catch (IOException e) { continue; }
-            if (!(xObject instanceof PDImageXObject image)) continue;
-
-            BufferedImage src = image.getImage();
-            if (src == null) continue;
-
-            BufferedImage gray = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_BYTE_GRAY);
-            Graphics2D g = gray.createGraphics();
-            g.drawImage(src, 0, 0, null);
-            g.dispose();
-
-            PDImageXObject grayXObject = LosslessFactory.createFromImage(document, gray);
-            xobjectDict.setItem(name, grayXObject.getCOSObject());
         }
     }
 
