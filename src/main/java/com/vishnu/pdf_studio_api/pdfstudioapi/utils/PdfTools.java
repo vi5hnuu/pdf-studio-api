@@ -5,25 +5,35 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.multipdf.LayerUtility;
 import org.apache.pdfbox.multipdf.PDFMergerUtility;
 import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.PDPageContentStream;
-import org.apache.pdfbox.pdmodel.PDPageTree;
+import org.apache.pdfbox.pdmodel.*;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
+import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
 import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.pdmodel.graphics.PDXObject;
+import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.pdfbox.util.Matrix;
 import org.springframework.web.multipart.MultipartFile;
 
+import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageWriter;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.stream.MemoryCacheImageOutputStream;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
@@ -36,13 +46,142 @@ import java.util.zip.ZipOutputStream;
 
 @Slf4j
 public class PdfTools {
-    public static byte[] compressPdf(byte[] fileBytes, String outFileName, float compressQuality) {
-        return null;
+    public static byte[] compressPdf(byte[] fileBytes, CompressionLevel level) throws IOException {
+        try (PDDocument document = Loader.loadPDF(fileBytes);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+            for (int i = 0; i < document.getNumberOfPages(); i++) {
+                compressImagesOnPage(document.getPage(i), document, level);
+            }
+
+            document.save(baos, CompressParameters.DEFAULT_COMPRESSION);
+            return baos.toByteArray();
+        }
     }
 
+    public static byte[] watermarkPdf(PDDocument document, String text, int fontSize, ColorModel color, float opacity, double angleDegrees, Postion vPos, Postion hPos, Integer fromPage, Integer toPage) throws IOException {
+        if (fromPage == null) fromPage = 0;
+        if (toPage == null) toPage = document.getNumberOfPages() - 1;
+        if (vPos == null) vPos = Postion.CENTER;
+        if (hPos == null) hPos = Postion.CENTER;
 
-    private static void compressImagesOnPage(PDPage page) throws IOException {
+        PDFont font = new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD);
 
+        for (int pNo = fromPage; pNo <= toPage && pNo < document.getNumberOfPages(); pNo++) {
+            PDPage page = document.getPage(pNo);
+            float pageWidth = page.getMediaBox().getWidth();
+            float pageHeight = page.getMediaBox().getHeight();
+
+            float textWidth = font.getStringWidth(text) / 1000f * fontSize;
+            float textHeight = font.getFontDescriptor().getFontBoundingBox().getHeight() / 1000f * fontSize;
+
+            float x = switch (hPos) {
+                case START -> 20f;
+                case CENTER -> (pageWidth - textWidth) / 2f;
+                case END -> pageWidth - textWidth - 20f;
+            };
+            float y = switch (vPos) {
+                case START -> pageHeight - textHeight - 20f;
+                case CENTER -> (pageHeight - textHeight) / 2f;
+                case END -> 20f;
+            };
+
+            try (PDPageContentStream cs = new PDPageContentStream(document, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                PDExtendedGraphicsState gs = new PDExtendedGraphicsState();
+                gs.setNonStrokingAlphaConstant(opacity);
+                gs.setAlphaSourceFlag(true);
+                cs.setGraphicsStateParameters(gs);
+
+                cs.beginText();
+                cs.setFont(font, fontSize);
+                cs.setNonStrokingColor(color.color());
+
+                double radians = Math.toRadians(angleDegrees);
+                Matrix matrix = new Matrix(
+                    (float) Math.cos(radians), (float) Math.sin(radians),
+                    -(float) Math.sin(radians), (float) Math.cos(radians),
+                    x, y
+                );
+                cs.setTextMatrix(matrix);
+                cs.showText(text);
+                cs.endText();
+            }
+        }
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        document.save(baos, CompressParameters.NO_COMPRESSION);
+        return baos.toByteArray();
+    }
+
+    public static String extractText(PDDocument document) throws IOException {
+        PDFTextStripper stripper = new PDFTextStripper();
+        stripper.setSortByPosition(true);
+        return stripper.getText(document);
+    }
+
+    public static byte[] grayscalePdf(byte[] fileBytes) throws IOException {
+        try (PDDocument source = Loader.loadPDF(fileBytes);
+             PDDocument output = new PDDocument();
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+            PDFRenderer renderer = new PDFRenderer(source);
+
+            for (int i = 0; i < source.getNumberOfPages(); i++) {
+                PDRectangle mediaBox = source.getPage(i).getMediaBox();
+
+                BufferedImage pageImage = renderer.renderImageWithDPI(i, 150, ImageType.GRAY);
+
+                PDPage newPage = new PDPage(new PDRectangle(mediaBox.getWidth(), mediaBox.getHeight()));
+                output.addPage(newPage);
+
+                PDImageXObject pdImage = LosslessFactory.createFromImage(output, pageImage);
+                try (PDPageContentStream cs = new PDPageContentStream(output, newPage)) {
+                    cs.drawImage(pdImage, 0, 0, mediaBox.getWidth(), mediaBox.getHeight());
+                }
+            }
+
+            output.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    private static void compressImagesOnPage(PDPage page, PDDocument document, CompressionLevel level) throws IOException {
+        PDResources resources = page.getResources();
+        if (resources == null) return;
+
+        COSDictionary xobjectDict = resources.getCOSObject().getCOSDictionary(COSName.XOBJECT);
+        if (xobjectDict == null) return;
+
+        for (COSName name : resources.getXObjectNames()) {
+            PDXObject xObject;
+            try { xObject = resources.getXObject(name); } catch (IOException e) { continue; }
+            if (!(xObject instanceof PDImageXObject image)) continue;
+
+            BufferedImage src = image.getImage();
+            if (src == null) continue;
+
+            // Flatten to RGB — JPEG does not support transparency
+            BufferedImage rgb = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = rgb.createGraphics();
+            g.setColor(Color.WHITE);
+            g.fillRect(0, 0, rgb.getWidth(), rgb.getHeight());
+            g.drawImage(src, 0, 0, null);
+            g.dispose();
+
+            ByteArrayOutputStream imgBaos = new ByteArrayOutputStream();
+            ImageWriter jpegWriter = ImageIO.getImageWritersByFormatName("JPEG").next();
+            ImageWriteParam jpegParams = jpegWriter.getDefaultWriteParam();
+            jpegParams.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+            jpegParams.setCompressionQuality(level.getQuality());
+            try (MemoryCacheImageOutputStream memOut = new MemoryCacheImageOutputStream(imgBaos)) {
+                jpegWriter.setOutput(memOut);
+                jpegWriter.write(null, new IIOImage(rgb, null, null), jpegParams);
+            }
+            jpegWriter.dispose();
+
+            PDImageXObject compressed = PDImageXObject.createFromByteArray(document, imgBaos.toByteArray(), name.getName());
+            xobjectDict.setItem(name, compressed.getCOSObject());
+        }
     }
 
     public static byte[] pdfToImage(PDDocument document, Boolean singleImage, Direction direction, Quality quality, Integer imageGap) throws IOException {
@@ -358,6 +497,222 @@ public class PdfTools {
             if (userAccessPermissions.contains(UserAccessPermission.READ_ONLY)) ap.setReadOnly();
         }
         return ap;
+    }
+
+    public static byte[] cropPdf(PDDocument document, Float marginTop, Float marginBottom, Float marginLeft, Float marginRight) throws IOException {
+        if (marginTop == null) marginTop = 0f;
+        if (marginBottom == null) marginBottom = 0f;
+        if (marginLeft == null) marginLeft = 0f;
+        if (marginRight == null) marginRight = 0f;
+
+        for (int i = 0; i < document.getNumberOfPages(); i++) {
+            PDPage page = document.getPage(i);
+            PDRectangle mb = page.getMediaBox();
+            float llx = mb.getLowerLeftX() + marginLeft;
+            float lly = mb.getLowerLeftY() + marginBottom;
+            float width = mb.getWidth() - marginLeft - marginRight;
+            float height = mb.getHeight() - marginTop - marginBottom;
+            if (width > 0 && height > 0) {
+                page.setCropBox(new PDRectangle(llx, lly, width, height));
+            }
+        }
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        document.save(baos, CompressParameters.NO_COMPRESSION);
+        return baos.toByteArray();
+    }
+
+    public static Map<String, String> getMetadata(PDDocument document) {
+        PDDocumentInformation info = document.getDocumentInformation();
+        Map<String, String> result = new java.util.LinkedHashMap<>();
+        result.put("title", info.getTitle());
+        result.put("author", info.getAuthor());
+        result.put("subject", info.getSubject());
+        result.put("keywords", info.getKeywords());
+        result.put("creator", info.getCreator());
+        result.put("producer", info.getProducer());
+        result.put("page_count", String.valueOf(document.getNumberOfPages()));
+        if (info.getCreationDate() != null) result.put("creation_date", info.getCreationDate().getTime().toString());
+        if (info.getModificationDate() != null) result.put("modification_date", info.getModificationDate().getTime().toString());
+        return result;
+    }
+
+    public static byte[] editMetadata(PDDocument document, String title, String author, String subject, String keywords, String creator, String producer) throws IOException {
+        PDDocumentInformation info = document.getDocumentInformation();
+        if (title != null) info.setTitle(title);
+        if (author != null) info.setAuthor(author);
+        if (subject != null) info.setSubject(subject);
+        if (keywords != null) info.setKeywords(keywords);
+        if (creator != null) info.setCreator(creator);
+        if (producer != null) info.setProducer(producer);
+        document.setDocumentInformation(info);
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        document.save(baos, CompressParameters.NO_COMPRESSION);
+        return baos.toByteArray();
+    }
+
+    public static byte[] addHeaderFooter(PDDocument document, String headerText, String footerText, Integer fontSize, ColorModel color, Standard14Fonts.FontName fontName, Integer fromPage, Integer toPage, Float topPadding, Float bottomPadding) throws IOException {
+        if (fontSize == null) fontSize = 10;
+        if (color == null) color = ColorModel.BLACK;
+        if (fontName == null) fontName = Standard14Fonts.FontName.HELVETICA;
+        if (topPadding == null) topPadding = 10f;
+        if (bottomPadding == null) bottomPadding = 10f;
+        if (fromPage == null) fromPage = 0;
+        if (toPage == null) toPage = document.getNumberOfPages() - 1;
+
+        PDFont font = new PDType1Font(fontName);
+        int totalPages = document.getNumberOfPages();
+
+        for (int pNo = fromPage; pNo <= toPage && pNo < totalPages; pNo++) {
+            PDPage page = document.getPage(pNo);
+            float pageWidth = page.getMediaBox().getWidth();
+            float pageHeight = page.getMediaBox().getHeight();
+
+            String resolvedHeader = headerText != null ? resolveDsl(headerText, pNo + 1, totalPages) : null;
+            String resolvedFooter = footerText != null ? resolveDsl(footerText, pNo + 1, totalPages) : null;
+
+            try (PDPageContentStream cs = new PDPageContentStream(document, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                cs.setNonStrokingColor(color.color());
+                cs.setFont(font, fontSize);
+
+                if (resolvedHeader != null && !resolvedHeader.isBlank()) {
+                    float textWidth = font.getStringWidth(resolvedHeader) / 1000f * fontSize;
+                    float x = (pageWidth - textWidth) / 2f;
+                    float y = pageHeight - topPadding - fontSize;
+                    cs.beginText();
+                    cs.newLineAtOffset(x, y);
+                    cs.showText(resolvedHeader);
+                    cs.endText();
+                }
+
+                if (resolvedFooter != null && !resolvedFooter.isBlank()) {
+                    float textWidth = font.getStringWidth(resolvedFooter) / 1000f * fontSize;
+                    float x = (pageWidth - textWidth) / 2f;
+                    float y = bottomPadding;
+                    cs.beginText();
+                    cs.newLineAtOffset(x, y);
+                    cs.showText(resolvedFooter);
+                    cs.endText();
+                }
+            }
+        }
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        document.save(baos, CompressParameters.NO_COMPRESSION);
+        return baos.toByteArray();
+    }
+
+    /**
+     * Resolves DSL tokens in header/footer text.
+     * Supported tokens:
+     *   {{page}}            → current page number (1-based)
+     *   {{total}}           → total page count
+     *   {{page_of_total}}   → "3 of 10"
+     *   {{page/total}}      → "3/10"
+     *   {{roman}}           → lowercase roman numeral (i, ii, iii …)
+     *   {{ROMAN}}           → uppercase roman numeral (I, II, III …)
+     */
+    private static String resolveDsl(String template, int page, int total) {
+        return template
+                .replace("{{page}}", String.valueOf(page))
+                .replace("{{total}}", String.valueOf(total))
+                .replace("{{page_of_total}}", page + " of " + total)
+                .replace("{{page/total}}", page + "/" + total)
+                .replace("{{roman}}", toRoman(page).toLowerCase(java.util.Locale.ROOT))
+                .replace("{{ROMAN}}", toRoman(page));
+    }
+
+    private static String toRoman(int n) {
+        if (n <= 0) return String.valueOf(n);
+        String[] thousands = {"", "M", "MM", "MMM"};
+        String[] hundreds  = {"", "C", "CC", "CCC", "CD", "D", "DC", "DCC", "DCCC", "CM"};
+        String[] tens      = {"", "X", "XX", "XXX", "XL", "L", "LX", "LXX", "LXXX", "XC"};
+        String[] ones      = {"", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"};
+        return thousands[Math.min(n / 1000, 3)]
+             + hundreds[(n % 1000) / 100]
+             + tens[(n % 100) / 10]
+             + ones[n % 10];
+    }
+
+    public static byte[] repairPdf(byte[] fileBytes) throws IOException {
+        try (PDDocument document = Loader.loadPDF(fileBytes);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            document.save(baos, CompressParameters.DEFAULT_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    public static byte[] flattenPdf(PDDocument document) throws IOException {
+        PDAcroForm acroForm = document.getDocumentCatalog().getAcroForm();
+        if (acroForm != null) {
+            acroForm.flatten();
+        }
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        document.save(baos, CompressParameters.NO_COMPRESSION);
+        return baos.toByteArray();
+    }
+
+    public static byte[] addBlankPages(PDDocument document, int[] positions, Float pageWidth, Float pageHeight) throws IOException {
+        float bWidth = pageWidth != null ? pageWidth : PDRectangle.A4.getWidth();
+        float bHeight = pageHeight != null ? pageHeight : PDRectangle.A4.getHeight();
+
+        if (positions == null || positions.length == 0) {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            document.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+
+        int[] sorted = Arrays.stream(positions).sorted().toArray();
+        PDDocument newDoc = new PDDocument();
+        PDPageTree oldPages = document.getPages();
+        int totalOld = document.getNumberOfPages();
+        int insertIndex = 0;
+
+        for (int i = 0; i <= totalOld; i++) {
+            while (insertIndex < sorted.length && sorted[insertIndex] == i) {
+                newDoc.addPage(new PDPage(new PDRectangle(bWidth, bHeight)));
+                insertIndex++;
+            }
+            if (i < totalOld) {
+                newDoc.addPage(oldPages.get(i));
+            }
+        }
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        newDoc.save(baos, CompressParameters.NO_COMPRESSION);
+        newDoc.close();
+        return baos.toByteArray();
+    }
+
+    public static byte[] stampPdf(byte[] sourceBytes, byte[] stampBytes, Float opacity, Integer fromPage, Integer toPage) throws IOException {
+        try (PDDocument source = Loader.loadPDF(sourceBytes);
+             PDDocument stamp = Loader.loadPDF(stampBytes);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+            if (fromPage == null) fromPage = 0;
+            if (toPage == null) toPage = source.getNumberOfPages() - 1;
+            if (opacity == null) opacity = 1.0f;
+
+            LayerUtility layerUtility = new LayerUtility(source);
+            PDFormXObject stampForm = layerUtility.importPageAsForm(stamp, 0);
+
+            for (int pNo = fromPage; pNo <= toPage && pNo < source.getNumberOfPages(); pNo++) {
+                PDPage page = source.getPage(pNo);
+                try (PDPageContentStream cs = new PDPageContentStream(source, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                    if (opacity < 1.0f) {
+                        PDExtendedGraphicsState gs = new PDExtendedGraphicsState();
+                        gs.setNonStrokingAlphaConstant(opacity);
+                        gs.setAlphaSourceFlag(true);
+                        cs.setGraphicsStateParameters(gs);
+                    }
+                    cs.drawForm(stampForm);
+                }
+            }
+
+            source.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
     }
 
     public static byte[] mergePdf(String outputFileName, List<MultipartFile> files) throws Exception {

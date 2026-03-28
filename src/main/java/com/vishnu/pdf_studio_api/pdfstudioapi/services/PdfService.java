@@ -20,6 +20,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -100,12 +101,201 @@ public class PdfService {
     }
 
     public ResponseEntity<Resource> compressPdf(String outFileName, CompressionLevel level, MultipartFile file) {
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "compressed-pdf";
+        if (level == null) level = CompressionLevel.RECOMMENDED;
 
-        } catch (IOException e) {
+        try {
+            final byte[] doc = PdfTools.compressPdf(file.getBytes(), level);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+
+            return ResponseEntity.status(200).headers(headers).body(baR);
+        } catch (Exception e) {
             throw new RuntimeException(e);
         }
-        return ResponseEntity.status(200).body(null);
+    }
+
+    public ResponseEntity<Resource> watermarkPdf(String outFileName, String text, Integer fontSize, ColorModel color, Float opacity, Double angle, Postion vPos, Postion hPos, Integer fromPage, Integer toPage, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "watermarked-pdf";
+        if (text == null || text.isBlank()) text = "CONFIDENTIAL";
+        if (fontSize == null) fontSize = 48;
+        if (color == null) color = ColorModel.BLACK;
+        if (opacity == null) opacity = 0.3f;
+        if (angle == null) angle = 45.0;
+        if (vPos == null) vPos = Postion.CENTER;
+        if (hPos == null) hPos = Postion.CENTER;
+        if (fromPage == null) fromPage = 0;
+
+        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+            final byte[] doc = PdfTools.watermarkPdf(document, text, fontSize, color, opacity, angle, vPos, hPos, fromPage, toPage);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+
+            return ResponseEntity.status(200).headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> extractText(MultipartFile file, String outFileName) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "extracted-text";
+
+        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+            if (document.isEncrypted()) throw new Exception("document is protected, please remove password first");
+
+            String text = PdfTools.extractText(document);
+            byte[] textBytes = text.getBytes(StandardCharsets.UTF_8);
+            ByteArrayResource baR = new ByteArrayResource(textBytes);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.txt", outFileName));
+            headers.setContentLength(textBytes.length);
+            headers.setContentType(MediaType.TEXT_PLAIN);
+
+            return ResponseEntity.status(200).headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> grayscalePdf(String outFileName, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "grayscale-pdf";
+
+        try {
+            final byte[] doc = PdfTools.grayscalePdf(file.getBytes());
+            ByteArrayResource baR = new ByteArrayResource(doc);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+
+            return ResponseEntity.status(200).headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> cropPdf(String outFileName, Float marginTop, Float marginBottom, Float marginLeft, Float marginRight, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "cropped-pdf";
+        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+            final byte[] doc = PdfTools.cropPdf(document, marginTop, marginBottom, marginLeft, marginRight);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.status(200).headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<?> getMetadata(MultipartFile file) {
+        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+            return ResponseEntity.ok(PdfTools.getMetadata(document));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> editMetadata(String outFileName, String title, String author, String subject, String keywords, String creator, String producer, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "edited-pdf";
+        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+            final byte[] doc = PdfTools.editMetadata(document, title, author, subject, keywords, creator, producer);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.status(200).headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> addHeaderFooter(String outFileName, String headerText, String footerText, Integer fontSize, com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel color, org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName fontName, Integer fromPage, Integer toPage, Float topPadding, Float bottomPadding, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "header-footer-pdf";
+        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+            if (toPage == null) toPage = document.getNumberOfPages() - 1;
+            final byte[] doc = PdfTools.addHeaderFooter(document, headerText, footerText, fontSize, color, fontName, fromPage, toPage, topPadding, bottomPadding);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.status(200).headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> repairPdf(String outFileName, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "repaired-pdf";
+        try {
+            final byte[] doc = PdfTools.repairPdf(file.getBytes());
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.status(200).headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> flattenPdf(String outFileName, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "flattened-pdf";
+        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+            final byte[] doc = PdfTools.flattenPdf(document);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.status(200).headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> addBlankPages(String outFileName, int[] positions, Float pageWidth, Float pageHeight, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "pdf-with-blanks";
+        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+            final byte[] doc = PdfTools.addBlankPages(document, positions, pageWidth, pageHeight);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.status(200).headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> stampPdf(String outFileName, Float opacity, Integer fromPage, Integer toPage, MultipartFile sourceFile, MultipartFile stampFile) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "stamped-pdf";
+        try {
+            final byte[] doc = PdfTools.stampPdf(sourceFile.getBytes(), stampFile.getBytes(), opacity, fromPage, toPage);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.status(200).headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public ResponseEntity<Resource> pdfToWord(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
@@ -215,9 +405,6 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> waterMark(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
-        return ResponseEntity.status(200).body(null);
-    }
 
     public ResponseEntity<Resource> rotatePdf(String outFileName,Integer fileAngle,Map<Integer,Integer> pageAngles,Boolean maintainRatio,MultipartFile file) {
         if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "rotated_file";
@@ -303,9 +490,6 @@ public class PdfService {
         return ResponseEntity.status(200).body(null);
     }
 
-    public ResponseEntity<Resource> extractTxt(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
-        return ResponseEntity.status(200).body(null);
-    }
 
     public ResponseEntity<Resource> createPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
         return ResponseEntity.status(200).body(null);
