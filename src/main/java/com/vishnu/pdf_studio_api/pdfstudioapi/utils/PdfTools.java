@@ -11,11 +11,7 @@ import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
 import org.apache.pdfbox.pdmodel.*;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
-import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
-import org.apache.pdfbox.pdmodel.interactive.form.PDCheckBox;
-import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
-import com.vishnu.pdf_studio_api.pdfstudioapi.model.FormFieldDef;
 import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
 import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.apache.pdfbox.pdmodel.font.PDFont;
@@ -578,33 +574,37 @@ public class PdfTools {
         if (toPage == null) toPage = document.getNumberOfPages() - 1;
 
         PDFont font = new PDType1Font(fontName);
+        int totalPages = document.getNumberOfPages();
 
-        for (int pNo = fromPage; pNo <= toPage && pNo < document.getNumberOfPages(); pNo++) {
+        for (int pNo = fromPage; pNo <= toPage && pNo < totalPages; pNo++) {
             PDPage page = document.getPage(pNo);
             float pageWidth = page.getMediaBox().getWidth();
             float pageHeight = page.getMediaBox().getHeight();
+
+            String resolvedHeader = headerText != null ? resolveDsl(headerText, pNo + 1, totalPages) : null;
+            String resolvedFooter = footerText != null ? resolveDsl(footerText, pNo + 1, totalPages) : null;
 
             try (PDPageContentStream cs = new PDPageContentStream(document, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
                 cs.setNonStrokingColor(color.color());
                 cs.setFont(font, fontSize);
 
-                if (headerText != null && !headerText.isBlank()) {
-                    float textWidth = font.getStringWidth(headerText) / 1000f * fontSize;
+                if (resolvedHeader != null && !resolvedHeader.isBlank()) {
+                    float textWidth = font.getStringWidth(resolvedHeader) / 1000f * fontSize;
                     float x = (pageWidth - textWidth) / 2f;
                     float y = pageHeight - topPadding - fontSize;
                     cs.beginText();
                     cs.newLineAtOffset(x, y);
-                    cs.showText(headerText);
+                    cs.showText(resolvedHeader);
                     cs.endText();
                 }
 
-                if (footerText != null && !footerText.isBlank()) {
-                    float textWidth = font.getStringWidth(footerText) / 1000f * fontSize;
+                if (resolvedFooter != null && !resolvedFooter.isBlank()) {
+                    float textWidth = font.getStringWidth(resolvedFooter) / 1000f * fontSize;
                     float x = (pageWidth - textWidth) / 2f;
                     float y = bottomPadding;
                     cs.beginText();
                     cs.newLineAtOffset(x, y);
-                    cs.showText(footerText);
+                    cs.showText(resolvedFooter);
                     cs.endText();
                 }
             }
@@ -613,6 +613,38 @@ public class PdfTools {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         document.save(baos, CompressParameters.NO_COMPRESSION);
         return baos.toByteArray();
+    }
+
+    /**
+     * Resolves DSL tokens in header/footer text.
+     * Supported tokens:
+     *   {{page}}            → current page number (1-based)
+     *   {{total}}           → total page count
+     *   {{page_of_total}}   → "3 of 10"
+     *   {{page/total}}      → "3/10"
+     *   {{roman}}           → lowercase roman numeral (i, ii, iii …)
+     *   {{ROMAN}}           → uppercase roman numeral (I, II, III …)
+     */
+    private static String resolveDsl(String template, int page, int total) {
+        return template
+                .replace("{{page}}", String.valueOf(page))
+                .replace("{{total}}", String.valueOf(total))
+                .replace("{{page_of_total}}", page + " of " + total)
+                .replace("{{page/total}}", page + "/" + total)
+                .replace("{{roman}}", toRoman(page).toLowerCase(java.util.Locale.ROOT))
+                .replace("{{ROMAN}}", toRoman(page));
+    }
+
+    private static String toRoman(int n) {
+        if (n <= 0) return String.valueOf(n);
+        String[] thousands = {"", "M", "MM", "MMM"};
+        String[] hundreds  = {"", "C", "CC", "CCC", "CD", "D", "DC", "DCC", "DCCC", "CM"};
+        String[] tens      = {"", "X", "XX", "XXX", "XL", "L", "LX", "LXX", "LXXX", "XC"};
+        String[] ones      = {"", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"};
+        return thousands[Math.min(n / 1000, 3)]
+             + hundreds[(n % 1000) / 100]
+             + tens[(n % 100) / 10]
+             + ones[n % 10];
     }
 
     public static byte[] repairPdf(byte[] fileBytes) throws IOException {
@@ -621,60 +653,6 @@ public class PdfTools {
             document.save(baos, CompressParameters.DEFAULT_COMPRESSION);
             return baos.toByteArray();
         }
-    }
-
-    public static byte[] addFormFields(PDDocument document, List<FormFieldDef> fields) throws IOException {
-        if (fields == null || fields.isEmpty()) {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            document.save(baos, CompressParameters.NO_COMPRESSION);
-            return baos.toByteArray();
-        }
-
-        PDFont font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
-        PDDocumentCatalog catalog = document.getDocumentCatalog();
-        PDAcroForm acroForm = catalog.getAcroForm();
-        if (acroForm == null) {
-            acroForm = new PDAcroForm(document);
-            catalog.setAcroForm(acroForm);
-        }
-        acroForm.setNeedAppearances(true);
-
-        PDResources dr = acroForm.getDefaultResources();
-        if (dr == null) dr = new PDResources();
-        dr.put(COSName.getPDFName("Helv"), font);
-        acroForm.setDefaultResources(dr);
-
-        for (FormFieldDef f : fields) {
-            if (f.getPage() < 0 || f.getPage() >= document.getNumberOfPages()) continue;
-            PDPage page = document.getPage(f.getPage());
-
-            PDAnnotationWidget widget = new PDAnnotationWidget();
-            widget.setRectangle(new PDRectangle(f.getX(), f.getY(), f.getWidth(), f.getHeight()));
-            widget.setPage(page);
-            widget.setPrinted(true);
-
-            if (f.getType() == FormFieldDef.FieldType.CHECKBOX) {
-                PDCheckBox field = new PDCheckBox(acroForm);
-                field.setPartialName(f.getName() != null ? f.getName() : "checkbox_" + f.getPage() + "_" + (int) f.getX());
-                field.getWidgets().add(widget);
-                widget.setParent(field);
-                acroForm.getFields().add(field);
-            } else {
-                PDTextField field = new PDTextField(acroForm);
-                field.setPartialName(f.getName() != null ? f.getName() : "text_" + f.getPage() + "_" + (int) f.getX());
-                field.setDefaultAppearance("/Helv 12 Tf 0 g");
-                if (f.isMultiline()) field.setMultiline(true);
-                if (f.getDefaultValue() != null) field.setValue(f.getDefaultValue());
-                field.getWidgets().add(widget);
-                widget.setParent(field);
-                acroForm.getFields().add(field);
-            }
-            page.getAnnotations().add(widget);
-        }
-
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        document.save(baos, CompressParameters.NO_COMPRESSION);
-        return baos.toByteArray();
     }
 
     public static byte[] flattenPdf(PDDocument document) throws IOException {

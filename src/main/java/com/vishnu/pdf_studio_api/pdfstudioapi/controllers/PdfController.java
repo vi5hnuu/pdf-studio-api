@@ -105,11 +105,6 @@ public class PdfController {
         return pdfService.editMetadata(emr.getOutFileName(), emr.getTitle(), emr.getAuthor(), emr.getSubject(), emr.getKeywords(), emr.getCreator(), emr.getProducer(), file);
     }
 
-    @PostMapping(value = "/add-form-fields", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> addFormFields(@RequestPart("add-form-fields-info") AddFormFieldsRequest afr, @RequestPart("file") MultipartFile file) {
-        return pdfService.addFormFields(afr.getOutFileName(), afr.getFields(), file);
-    }
-
     @PostMapping(value = "/header-footer", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> headerFooter(@RequestPart(value = "header-footer-info", required = false) HeaderFooterRequest hfr, @RequestPart("file") MultipartFile file) {
         if (hfr == null) hfr = new HeaderFooterRequest();

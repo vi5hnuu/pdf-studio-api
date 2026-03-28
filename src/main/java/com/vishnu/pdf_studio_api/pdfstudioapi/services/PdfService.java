@@ -238,21 +238,6 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> addFormFields(String outFileName, java.util.List<com.vishnu.pdf_studio_api.pdfstudioapi.model.FormFieldDef> fields, MultipartFile file) {
-        if (outFileName == null || outFileName.isBlank()) outFileName = "form-pdf";
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
-            final byte[] doc = PdfTools.addFormFields(document, fields);
-            ByteArrayResource baR = new ByteArrayResource(doc);
-            HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
-            headers.setContentLength(doc.length);
-            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
-            return ResponseEntity.status(200).headers(headers).body(baR);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
-
     public ResponseEntity<Resource> repairPdf(String outFileName, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "repaired-pdf";
         try {
