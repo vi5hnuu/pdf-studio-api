@@ -298,6 +298,29 @@ public class PdfService {
         }
     }
 
+    /**
+     * Places an image at a user-defined position and size on a single PDF page.
+     * Coordinates are fractions of page dimensions for device independence.
+     */
+    public ResponseEntity<Resource> placeImage(String outFileName, int page,
+                                               float xFrac, float yFrac,
+                                               float widthFrac, float heightFrac,
+                                               MultipartFile pdfFile, MultipartFile imageFile) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "image-placed";
+        try {
+            byte[] result = PdfTools.placeImage(pdfFile.getBytes(), imageFile.getBytes(),
+                    page, xFrac, yFrac, widthFrac, heightFrac);
+            ByteArrayResource baR = new ByteArrayResource(result);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(result.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.status(200).headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     public ResponseEntity<Resource> pdfToWord(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
         return ResponseEntity.status(200).body(null);
     }

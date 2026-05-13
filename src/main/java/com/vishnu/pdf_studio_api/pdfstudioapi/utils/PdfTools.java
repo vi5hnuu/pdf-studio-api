@@ -754,6 +754,43 @@ public class PdfTools {
         }
     }
 
+    /**
+     * Places an image at an exact position/size on a single PDF page.
+     * x_frac, y_frac: top-left position as fractions of page dimensions (0.0–1.0).
+     * widthFrac, heightFrac: image size as fractions of page dimensions.
+     * PDFBox origin is bottom-left, so y is converted from top-left fraction.
+     */
+    public static byte[] placeImage(byte[] pdfBytes, byte[] imageBytes,
+                                    int pageIndex, float xFrac, float yFrac,
+                                    float widthFrac, float heightFrac) throws Exception {
+        try (PDDocument doc = Loader.loadPDF(pdfBytes);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+            if (pageIndex < 0 || pageIndex >= doc.getNumberOfPages())
+                throw new IllegalArgumentException("Page index out of range: " + pageIndex);
+
+            PDPage page = doc.getPage(pageIndex);
+            PDRectangle mediaBox = page.getMediaBox();
+            float pageWidth = mediaBox.getWidth();
+            float pageHeight = mediaBox.getHeight();
+
+            float x = xFrac * pageWidth;
+            float w = widthFrac * pageWidth;
+            float h = heightFrac * pageHeight;
+            // Convert from top-left to bottom-left coordinate origin used by PDFBox
+            float y = pageHeight - (yFrac * pageHeight) - h;
+
+            PDImageXObject pdImage = PDImageXObject.createFromByteArray(doc, imageBytes, "overlay");
+
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                cs.drawImage(pdImage, x, y, w, h);
+            }
+
+            doc.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
     public static byte[] mergePdf(String outputFileName, List<MultipartFile> files) throws Exception {
         PDFMergerUtility merger = new PDFMergerUtility();
         merger.setDestinationFileName(outputFileName);

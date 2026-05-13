@@ -133,4 +133,18 @@ public class PdfController {
         if (spr == null) spr = new StampPdfRequest();
         return pdfService.stampPdf(spr.getOutFileName(), spr.getOpacity(), spr.getFromPage(), spr.getToPage(), file, stamp);
     }
+
+    /**
+     * Places an image at a user-defined position and size on a specific PDF page.
+     * Coordinates (x_frac, y_frac, width_frac, height_frac) are 0.0–1.0 fractions of page dimensions.
+     */
+    @PostMapping(value = "/place-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> placeImage(
+            @RequestPart(value = "place-image-info") PlaceImageRequest req,
+            @RequestPart("file") MultipartFile file,
+            @RequestPart("image") MultipartFile image) {
+        return pdfService.placeImage(req.getOutFileName(), req.getPage(),
+                req.getXFrac(), req.getYFrac(), req.getWidthFrac(), req.getHeightFrac(),
+                file, image);
+    }
 }
