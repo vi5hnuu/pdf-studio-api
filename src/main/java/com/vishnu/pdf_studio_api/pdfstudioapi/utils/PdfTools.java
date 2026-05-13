@@ -19,6 +19,8 @@ import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDDocumentOutline;
+import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem;
 import org.apache.pdfbox.pdmodel.graphics.PDXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
@@ -322,6 +324,43 @@ public class PdfTools {
                         docX.addPage(pt.get(pNo));
                     }
                     ZipEntry entry = new ZipEntry("range_" + (rangeNo + 1) + ".pdf");
+                    zip.putNextEntry(entry);
+                    docX.save(baos);
+                    docX.close();
+                    zip.write(baos.toByteArray());
+                    baos.reset();
+                    zip.closeEntry();
+                }
+                zip.finish();
+                return zipOutputStream.toByteArray();
+            } else if (type.equals(SplitType.SPLIT_BY_BOOKMARK)) {
+                // Collect top-level bookmark page indices using PDFBox outline API
+                PDDocumentOutline outline = document.getDocumentCatalog().getDocumentOutline();
+                if (outline == null) throw new IOException("PDF has no outline/bookmarks");
+
+                List<Integer> bookmarkPages = new ArrayList<>();
+                PDOutlineItem item = outline.getFirstChild();
+                while (item != null) {
+                    PDPage page = item.findDestinationPage(document);
+                    if (page != null) {
+                        int idx = document.getPages().indexOf(page);
+                        if (idx >= 0 && !bookmarkPages.contains(idx)) bookmarkPages.add(idx);
+                    }
+                    item = item.getNextSibling();
+                }
+
+                if (bookmarkPages.isEmpty()) throw new IOException("No navigable bookmarks found in this PDF");
+                java.util.Collections.sort(bookmarkPages);
+                bookmarkPages.add(document.getNumberOfPages()); // sentinel for last chapter end
+
+                for (int i = 0; i < bookmarkPages.size() - 1; i++) {
+                    int fromPage = bookmarkPages.get(i);
+                    int toPage = bookmarkPages.get(i + 1) - 1;
+                    PDDocument docX = new PDDocument();
+                    for (int pNo = fromPage; pNo <= toPage && pNo < document.getNumberOfPages(); pNo++) {
+                        docX.addPage(pt.get(pNo));
+                    }
+                    ZipEntry entry = new ZipEntry("chapter_" + (i + 1) + ".pdf");
                     zip.putNextEntry(entry);
                     docX.save(baos);
                     docX.close();
