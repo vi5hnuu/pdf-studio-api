@@ -134,6 +134,33 @@ public class PdfController {
         return pdfService.stampPdf(spr.getOutFileName(), spr.getOpacity(), spr.getFromPage(), spr.getToPage(), file, stamp);
     }
 
+    /** Convert PDF to Word (.docx) — text-extraction based, preserves paragraph structure. */
+    @PostMapping(value = "/pdf-to-word", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> pdfToWord(
+            @RequestPart(value = "pdf-to-office-info", required = false) PdfToOfficeRequest req,
+            @RequestPart("file") MultipartFile file) {
+        String out = req != null ? req.getOutFileName() : null;
+        return pdfService.pdfToWord(out, file);
+    }
+
+    /** Convert PDF to Excel (.xlsx) — text-extraction based, one sheet per page. */
+    @PostMapping(value = "/pdf-to-excel", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> pdfToExcel(
+            @RequestPart(value = "pdf-to-office-info", required = false) PdfToOfficeRequest req,
+            @RequestPart("file") MultipartFile file) {
+        String out = req != null ? req.getOutFileName() : null;
+        return pdfService.pdfToExcel(out, file);
+    }
+
+    /** Convert PDF to PowerPoint (.pptx) — one slide per page with extracted text. */
+    @PostMapping(value = "/pdf-to-pptx", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> pdfToPptx(
+            @RequestPart(value = "pdf-to-office-info", required = false) PdfToOfficeRequest req,
+            @RequestPart("file") MultipartFile file) {
+        String out = req != null ? req.getOutFileName() : null;
+        return pdfService.pdfToPowerPoint(out, file);
+    }
+
     /**
      * Places an image at a user-defined position and size on a specific PDF page.
      * Coordinates (x_frac, y_frac, width_frac, height_frac) are 0.0–1.0 fractions of page dimensions.

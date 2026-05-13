@@ -4,6 +4,7 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
+import com.vishnu.pdf_studio_api.pdfstudioapi.utils.OfficeConvertTools;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -321,16 +322,52 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> pdfToWord(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
-        return ResponseEntity.status(200).body(null);
+    public ResponseEntity<Resource> pdfToWord(String outFileName, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "converted";
+        try {
+            byte[] result = OfficeConvertTools.pdfToDocx(file.getBytes());
+            ByteArrayResource baR = new ByteArrayResource(result);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + outFileName + ".docx");
+            headers.setContentLength(result.length);
+            headers.setContentType(MediaType.parseMediaType(
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"));
+            return ResponseEntity.ok().headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to convert PDF to Word: " + e.getMessage(), e);
+        }
     }
 
-    public ResponseEntity<Resource> pdfToPowerPoint(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
-        return ResponseEntity.status(200).body(null);
+    public ResponseEntity<Resource> pdfToPowerPoint(String outFileName, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "converted";
+        try {
+            byte[] result = OfficeConvertTools.pdfToPptx(file.getBytes());
+            ByteArrayResource baR = new ByteArrayResource(result);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + outFileName + ".pptx");
+            headers.setContentLength(result.length);
+            headers.setContentType(MediaType.parseMediaType(
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation"));
+            return ResponseEntity.ok().headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to convert PDF to PowerPoint: " + e.getMessage(), e);
+        }
     }
 
-    public ResponseEntity<Resource> pdfToExcel(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
-        return ResponseEntity.status(200).body(null);
+    public ResponseEntity<Resource> pdfToExcel(String outFileName, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "converted";
+        try {
+            byte[] result = OfficeConvertTools.pdfToXlsx(file.getBytes());
+            ByteArrayResource baR = new ByteArrayResource(result);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + outFileName + ".xlsx");
+            headers.setContentLength(result.length);
+            headers.setContentType(MediaType.parseMediaType(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+            return ResponseEntity.ok().headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to convert PDF to Excel: " + e.getMessage(), e);
+        }
     }
 
     public ResponseEntity<Resource> wordToPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
