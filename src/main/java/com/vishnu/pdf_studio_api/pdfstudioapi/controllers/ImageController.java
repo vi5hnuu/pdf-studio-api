@@ -1,5 +1,6 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.controllers;
 
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.ImageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.Resource;
@@ -16,20 +17,36 @@ import org.springframework.web.multipart.MultipartFile;
 @RequiredArgsConstructor
 public class ImageController {
     private final ImageService imageService;
-    @PostMapping(value = "/compress-image",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> compressImage(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return imageService.compressImage(a,multipartFile);
+
+    /** Compress an image to JPEG at the specified quality (1–100). Default 75. */
+    @PostMapping(value = "/compress-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> compressImage(
+            @RequestPart(value = "compress-image-info", required = false) CompressImageRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return imageService.compressImage(req, file);
     }
-    @PostMapping(value = "/convert-to-jpg",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> convertToJpg(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return imageService.convertToJpg(a,multipartFile);
+
+    /** Convert any image (PNG, BMP, GIF) to JPEG at the specified quality. Default 90. */
+    @PostMapping(value = "/convert-to-jpg", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> convertToJpg(
+            @RequestPart(value = "convert-to-jpg-info", required = false) ConvertToJpgRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return imageService.convertToJpg(req, file);
     }
-    @PostMapping(value = "/convert-from-jpg",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> convertFromJpg(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return imageService.convertFromJpg(a,multipartFile);
+
+    /** Convert a JPEG to PNG or BMP. Default target format: PNG. */
+    @PostMapping(value = "/convert-from-jpg", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> convertFromJpg(
+            @RequestPart(value = "convert-from-jpg-info", required = false) ConvertFromJpgRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return imageService.convertFromJpg(req, file);
     }
-    @PostMapping(value = "/resize-image",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> resizeImage(@RequestPart() Object a, @RequestPart MultipartFile multipartFile){
-        return imageService.resizeImage(a,multipartFile);
+
+    /** Resize an image to the specified width × height using bicubic interpolation. */
+    @PostMapping(value = "/resize-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> resizeImage(
+            @RequestPart(value = "resize-image-info", required = false) ResizeImageRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return imageService.resizeImage(req, file);
     }
 }
