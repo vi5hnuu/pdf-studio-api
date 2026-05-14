@@ -49,4 +49,12 @@ public class ImageController {
             @RequestPart("file") MultipartFile file) {
         return imageService.resizeImage(req, file);
     }
+
+    /** Apply a visual filter (grayscale, sepia, sharpen, brightness, contrast, vintage) to an image. */
+    @PostMapping(value = "/filter-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> filterImage(
+            @RequestPart(value = "filter-image-info", required = false) FilterImageRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return imageService.applyFilter(req, file);
+    }
 }

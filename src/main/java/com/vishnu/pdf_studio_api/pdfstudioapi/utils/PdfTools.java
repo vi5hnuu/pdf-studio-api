@@ -1,5 +1,7 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.utils;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.RedactPdfRequest.RedactRegion;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
@@ -19,8 +21,10 @@ import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.pdmodel.interactive.documentnavigation.destination.PDPageFitWidthDestination;
 import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDDocumentOutline;
 import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem;
+import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineNode;
 import org.apache.pdfbox.pdmodel.graphics.PDXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
@@ -788,6 +792,123 @@ public class PdfTools {
 
             doc.save(baos, CompressParameters.NO_COMPRESSION);
             return baos.toByteArray();
+        }
+    }
+
+    /**
+     * Draws solid black rectangles over each specified region to permanently redact content.
+     * Client sends top-left origin coords; PDFBox uses bottom-left, so Y is inverted.
+     */
+    public static byte[] redactPdf(byte[] fileBytes, List<RedactRegion> regions) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(fileBytes);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+            for (RedactRegion region : regions) {
+                if (region.getPage() < 0 || region.getPage() >= doc.getNumberOfPages()) continue;
+                PDPage page = doc.getPage(region.getPage());
+                float pageHeight = page.getMediaBox().getHeight();
+                // Invert Y: PDFBox origin is bottom-left; client sends top-left origin
+                float pdfY = pageHeight - region.getY() - region.getHeight();
+
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                    cs.setNonStrokingColor(Color.BLACK);
+                    cs.addRect(region.getX(), pdfY, region.getWidth(), region.getHeight());
+                    cs.fill();
+                }
+            }
+
+            doc.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    /**
+     * Duplicates selected pages by inserting {@code count} copies after each selected page.
+     * Uses importPage() — required when copying pages across PDDocument instances.
+     */
+    public static byte[] duplicatePages(byte[] fileBytes, List<Integer> pageIndices, int count) throws IOException {
+        try (PDDocument src = Loader.loadPDF(fileBytes);
+             PDDocument out = new PDDocument();
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+            int total = src.getNumberOfPages();
+            for (int i = 0; i < total; i++) {
+                out.importPage(src.getPage(i));
+                if (pageIndices.contains(i)) {
+                    for (int c = 0; c < count; c++) {
+                        out.importPage(src.getPage(i));
+                    }
+                }
+            }
+
+            out.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    /**
+     * Reads the document outline (bookmarks) and returns a flat list of bookmark maps
+     * with keys: title, pageIndex, children (recursive).
+     */
+    public static List<Map<String, Object>> getBookmarks(PDDocument doc) {
+        PDDocumentOutline outline = doc.getDocumentCatalog().getDocumentOutline();
+        if (outline == null) return List.of();
+        return collectOutlineItems(outline.getFirstChild(), doc);
+    }
+
+    private static List<Map<String, Object>> collectOutlineItems(PDOutlineItem item, PDDocument doc) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        while (item != null) {
+            Map<String, Object> entry = new java.util.LinkedHashMap<>();
+            entry.put("title", item.getTitle() != null ? item.getTitle() : "");
+            PDPage page = item.findDestinationPage(doc);
+            entry.put("pageIndex", page != null ? doc.getPages().indexOf(page) : 0);
+            entry.put("children", collectOutlineItems(item.getFirstChild(), doc));
+            result.add(entry);
+            item = item.getNextSibling();
+        }
+        return result;
+    }
+
+    /**
+     * Replaces the document outline with bookmarks parsed from {@code bookmarksJson}.
+     * Expected JSON: List<{title, pageIndex, children[]}>.
+     * Uses a local ObjectMapper since this is a static utility method.
+     */
+    @SuppressWarnings("unchecked")
+    public static byte[] editBookmarks(PDDocument doc, String bookmarksJson) throws IOException {
+        ObjectMapper mapper = new ObjectMapper();
+        List<Map<String, Object>> bookmarkList = mapper.readValue(bookmarksJson, List.class);
+
+        PDDocumentOutline outline = new PDDocumentOutline();
+        doc.getDocumentCatalog().setDocumentOutline(outline);
+        buildOutlineItems(outline, bookmarkList, doc, mapper);
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        doc.save(baos, CompressParameters.NO_COMPRESSION);
+        return baos.toByteArray();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void buildOutlineItems(PDOutlineNode parent, List<Map<String, Object>> items, PDDocument doc, ObjectMapper mapper) {
+        for (Map<String, Object> item : items) {
+            PDOutlineItem outlineItem = new PDOutlineItem();
+            outlineItem.setTitle((String) item.getOrDefault("title", ""));
+
+            Object pageIdxObj = item.get("pageIndex");
+            int pageIndex = pageIdxObj instanceof Number num ? num.intValue() : 0;
+            if (pageIndex >= 0 && pageIndex < doc.getNumberOfPages()) {
+                PDPageFitWidthDestination dest = new PDPageFitWidthDestination();
+                dest.setPage(doc.getPage(pageIndex));
+                outlineItem.setDestination(dest);
+            }
+
+            parent.addLast(outlineItem);
+
+            Object childrenObj = item.get("children");
+            if (childrenObj instanceof List<?> children && !children.isEmpty()) {
+                buildOutlineItems(outlineItem, (List<Map<String, Object>>) children, doc, mapper);
+            }
         }
     }
 

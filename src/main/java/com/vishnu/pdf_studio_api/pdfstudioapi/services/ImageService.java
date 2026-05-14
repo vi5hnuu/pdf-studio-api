@@ -1,6 +1,7 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.*;
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.FilterType;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
@@ -14,7 +15,8 @@ import javax.imageio.*;
 import javax.imageio.plugins.jpeg.JPEGImageWriteParam;
 import javax.imageio.stream.ImageOutputStream;
 import java.awt.*;
-import java.awt.image.BufferedImage;
+import java.awt.geom.Point2D;
+import java.awt.image.*;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Iterator;
@@ -141,6 +143,123 @@ public class ImageService {
         } catch (Exception e) {
             throw new RuntimeException("Failed to resize image: " + e.getMessage(), e);
         }
+    }
+
+    // ── Filter ────────────────────────────────────────────────────────────────
+
+    /**
+     * Applies a visual filter to the image. Intensity (0.0–2.0) controls the strength.
+     * Returns a JPEG-encoded filtered image.
+     */
+    public ResponseEntity<Resource> applyFilter(FilterImageRequest req, MultipartFile file) {
+        if (req == null) req = new FilterImageRequest();
+        FilterType type = req.getFilterType() != null ? req.getFilterType() : FilterType.GRAYSCALE;
+        float intensity = req.getIntensity();
+        String outFileName = defaultName(req.getOutFileName(),
+                stripExtension(file.getOriginalFilename()) + "_filtered");
+        try {
+            BufferedImage src = readImage(file);
+            BufferedImage result = applyFilterToImage(src, type, intensity);
+            byte[] bytes = encodeJpeg(toRgb(result), 90);
+            return fileResponse(bytes, outFileName + ".jpg", "image/jpeg");
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to apply filter: " + e.getMessage(), e);
+        }
+    }
+
+    private BufferedImage applyFilterToImage(BufferedImage src, FilterType type, float intensity) {
+        return switch (type) {
+            case GRAYSCALE -> toGrayscale(src);
+            case SEPIA -> applySepia(src, intensity);
+            case SHARPEN -> applySharpen(src, intensity);
+            case BRIGHTNESS -> applyBrightness(src, intensity);
+            case CONTRAST -> applyContrast(src, intensity);
+            case VINTAGE -> applyVintage(src, intensity);
+        };
+    }
+
+    private BufferedImage toGrayscale(BufferedImage src) {
+        BufferedImage gray = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_BYTE_GRAY);
+        Graphics2D g = gray.createGraphics();
+        g.drawImage(src, 0, 0, null);
+        g.dispose();
+        // Convert back to RGB so JPEG encoding works uniformly
+        BufferedImage rgb = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2 = rgb.createGraphics();
+        g2.drawImage(gray, 0, 0, null);
+        g2.dispose();
+        return rgb;
+    }
+
+    private BufferedImage applySepia(BufferedImage src, float intensity) {
+        BufferedImage out = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < src.getHeight(); y++) {
+            for (int x = 0; x < src.getWidth(); x++) {
+                int rgb = src.getRGB(x, y);
+                float r = ((rgb >> 16) & 0xff) / 255f;
+                float g = ((rgb >> 8) & 0xff) / 255f;
+                float b = (rgb & 0xff) / 255f;
+                // Standard sepia matrix
+                float sr = Math.min(1f, r * 0.393f + g * 0.769f + b * 0.189f);
+                float sg = Math.min(1f, r * 0.349f + g * 0.686f + b * 0.168f);
+                float sb = Math.min(1f, r * 0.272f + g * 0.534f + b * 0.131f);
+                // Blend with original based on intensity
+                int nr = Math.round((sr * intensity + r * (1f - intensity)) * 255);
+                int ng = Math.round((sg * intensity + g * (1f - intensity)) * 255);
+                int nb = Math.round((sb * intensity + b * (1f - intensity)) * 255);
+                out.setRGB(x, y, (clamp(nr, 0, 255) << 16) | (clamp(ng, 0, 255) << 8) | clamp(nb, 0, 255));
+            }
+        }
+        return out;
+    }
+
+    private BufferedImage applySharpen(BufferedImage src, float intensity) {
+        float i = Math.max(0.1f, intensity);
+        float[] kernel = {0, -i, 0, -i, 1 + 4 * i, -i, 0, -i, 0};
+        Kernel k = new Kernel(3, 3, kernel);
+        ConvolveOp op = new ConvolveOp(k, ConvolveOp.EDGE_NO_OP, null);
+        return op.filter(toRgb(src), null);
+    }
+
+    private BufferedImage applyBrightness(BufferedImage src, float intensity) {
+        // intensity 1.0 = no change, >1 brighter, <1 darker
+        RescaleOp op = new RescaleOp(intensity, 0, null);
+        return op.filter(toRgb(src), null);
+    }
+
+    private BufferedImage applyContrast(BufferedImage src, float intensity) {
+        // Contrast: scale around mid-point (128)
+        float scale = intensity;
+        float offset = 128f * (1f - scale);
+        RescaleOp op = new RescaleOp(
+                new float[]{scale, scale, scale},
+                new float[]{offset, offset, offset},
+                null);
+        return op.filter(toRgb(src), null);
+    }
+
+    private BufferedImage applyVintage(BufferedImage src, float intensity) {
+        // Vintage = sepia + dark radial vignette
+        BufferedImage sepia = applySepia(src, intensity);
+        int w = sepia.getWidth();
+        int h = sepia.getHeight();
+        BufferedImage vintage = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = vintage.createGraphics();
+        g.drawImage(sepia, 0, 0, null);
+
+        // Radial vignette: transparent center, dark edges
+        Point2D center = new Point2D.Float(w / 2f, h / 2f);
+        float radius = (float) Math.sqrt(w * w + h * h) / 2f;
+        float[] dist = {0f, 0.6f, 1f};
+        Color[] colors = {
+                new Color(0, 0, 0, 0),
+                new Color(0, 0, 0, 0),
+                new Color(0, 0, 0, Math.round(180 * intensity))
+        };
+        g.setPaint(new RadialGradientPaint(center, radius, dist, colors));
+        g.fillRect(0, 0, w, h);
+        g.dispose();
+        return vintage;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

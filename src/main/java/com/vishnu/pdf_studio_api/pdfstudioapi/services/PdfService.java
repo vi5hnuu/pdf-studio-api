@@ -1,5 +1,6 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.RedactPdfRequest.RedactRegion;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
@@ -367,6 +368,61 @@ public class PdfService {
             return ResponseEntity.ok().headers(headers).body(baR);
         } catch (Exception e) {
             throw new RuntimeException("Failed to convert PDF to Excel: " + e.getMessage(), e);
+        }
+    }
+
+    public ResponseEntity<Resource> redactPdf(String outFileName, List<RedactRegion> regions, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "redacted-pdf";
+        try {
+            byte[] doc = PdfTools.redactPdf(file.getBytes(), regions);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.ok().headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> duplicatePages(String outFileName, List<Integer> pages, Integer count, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "duplicated-pdf";
+        if (count == null || count < 1) count = 1;
+        try {
+            byte[] doc = PdfTools.duplicatePages(file.getBytes(), pages, count);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.ok().headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Returns the bookmark tree as JSON — does not produce a file download. */
+    public ResponseEntity<?> getBookmarks(MultipartFile file) {
+        try (PDDocument doc = Loader.loadPDF(file.getBytes())) {
+            return ResponseEntity.ok(PdfTools.getBookmarks(doc));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> editBookmarks(String outFileName, String bookmarksJson, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "bookmarked-pdf";
+        try (PDDocument doc = Loader.loadPDF(file.getBytes())) {
+            byte[] result = PdfTools.editBookmarks(doc, bookmarksJson);
+            ByteArrayResource baR = new ByteArrayResource(result);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(result.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.ok().headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 

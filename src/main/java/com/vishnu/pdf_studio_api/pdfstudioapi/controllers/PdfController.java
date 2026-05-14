@@ -174,4 +174,34 @@ public class PdfController {
                 req.getXFrac(), req.getYFrac(), req.getWidthFrac(), req.getHeightFrac(),
                 file, image);
     }
+
+    /** Permanently blacks out rectangular regions on specified pages. */
+    @PostMapping(value = "/redact-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> redactPdf(
+            @RequestPart("redact-pdf-info") RedactPdfRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return pdfService.redactPdf(req.getOutFileName(), req.getRegions(), file);
+    }
+
+    /** Duplicates selected pages (by 0-based index) {@code count} times after each occurrence. */
+    @PostMapping(value = "/duplicate-pages", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> duplicatePages(
+            @RequestPart("duplicate-pages-info") DuplicatePagesRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return pdfService.duplicatePages(req.getOutFileName(), req.getPages(), req.getCount(), file);
+    }
+
+    /** Returns the PDF bookmark/outline tree as JSON — no file download. */
+    @PostMapping(value = "/get-bookmarks", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> getBookmarks(@RequestPart("file") MultipartFile file) {
+        return pdfService.getBookmarks(file);
+    }
+
+    /** Replaces the PDF outline with the supplied bookmark tree (JSON-encoded string). */
+    @PostMapping(value = "/edit-bookmarks", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> editBookmarks(
+            @RequestPart("edit-bookmarks-info") EditBookmarksRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return pdfService.editBookmarks(req.getOutFileName(), req.getBookmarks(), file);
+    }
 }
