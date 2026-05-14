@@ -204,4 +204,28 @@ public class PdfController {
             @RequestPart("file") MultipartFile file) {
         return pdfService.editBookmarks(req.getOutFileName(), req.getBookmarks(), file);
     }
+
+    /** Removes pages whose pixel content is >= threshold fraction near-white (blank pages). */
+    @PostMapping(value = "/remove-blank-pages", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> removeBlankPages(
+            @RequestPart("remove-blank-pages-info") RemoveBlankPagesRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return pdfService.removeBlankPages(req.getOutFileName(), req.getThreshold(), file);
+    }
+
+    /** Removes embedded thumbnails and re-saves to reduce file size. */
+    @PostMapping(value = "/optimize-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> optimizePdf(
+            @RequestPart("optimize-pdf-info") OptimizePdfRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return pdfService.optimizePdf(req.getOutFileName(), file);
+    }
+
+    /** Tiles nUp (2 or 4) input pages onto each output sheet. */
+    @PostMapping(value = "/n-up", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> nUp(
+            @RequestPart("n-up-info") NUpRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return pdfService.nUpPdf(req.getOutFileName(), req.getNUp(), file);
+    }
 }

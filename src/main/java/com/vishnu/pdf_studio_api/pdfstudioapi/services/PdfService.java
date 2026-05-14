@@ -426,6 +426,51 @@ public class PdfService {
         }
     }
 
+    public ResponseEntity<Resource> removeBlankPages(String outFileName, float threshold, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "no-blank-pages";
+        try {
+            byte[] doc = PdfTools.removeBlankPages(file.getBytes(), threshold);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.ok().headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> optimizePdf(String outFileName, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "optimized";
+        try {
+            byte[] doc = PdfTools.optimizePdf(file.getBytes());
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.ok().headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ResponseEntity<Resource> nUpPdf(String outFileName, int nUp, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = nUp + "-up";
+        try {
+            byte[] doc = PdfTools.nUpPdf(file.getBytes(), nUp);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.ok().headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     public ResponseEntity<Resource> wordToPdf(@RequestPart() Object a, @RequestPart MultipartFile multipartFile) {
         return ResponseEntity.status(200).body(null);
     }

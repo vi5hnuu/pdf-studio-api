@@ -912,6 +912,102 @@ public class PdfTools {
         }
     }
 
+    /**
+     * Removes pages where >= threshold fraction of pixels are near-white (>= 240 grayscale).
+     * Renders at 72 DPI for speed. Returns original bytes if all or no pages would be removed.
+     */
+    public static byte[] removeBlankPages(byte[] fileBytes, float threshold) throws IOException {
+        try (PDDocument src = Loader.loadPDF(fileBytes)) {
+            PDFRenderer renderer = new PDFRenderer(src);
+            List<Integer> keepPages = new ArrayList<>();
+            for (int i = 0; i < src.getNumberOfPages(); i++) {
+                BufferedImage img = renderer.renderImageWithDPI(i, 72, ImageType.GRAY);
+                if (!isBlankPage(img, threshold)) keepPages.add(i);
+            }
+            if (keepPages.isEmpty() || keepPages.size() == src.getNumberOfPages()) return fileBytes;
+            try (PDDocument out = new PDDocument();
+                 ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                for (int idx : keepPages) out.importPage(src.getPage(idx));
+                out.save(baos, CompressParameters.NO_COMPRESSION);
+                return baos.toByteArray();
+            }
+        }
+    }
+
+    private static boolean isBlankPage(BufferedImage img, float threshold) {
+        int total = img.getWidth() * img.getHeight();
+        if (total == 0) return true;
+        int whiteCount = 0;
+        int[] pixels = img.getRGB(0, 0, img.getWidth(), img.getHeight(), null, 0, img.getWidth());
+        for (int px : pixels) {
+            if (((px >> 16) & 0xFF) >= 240) whiteCount++;
+        }
+        return (float) whiteCount / total >= threshold;
+    }
+
+    /**
+     * Removes embedded page thumbnails and re-saves the document to reduce file size.
+     */
+    public static byte[] optimizePdf(byte[] fileBytes) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(fileBytes);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            for (PDPage page : doc.getPages()) {
+                page.getCOSObject().removeItem(COSName.THUMB);
+            }
+            doc.save(baos);
+            return baos.toByteArray();
+        }
+    }
+
+    /**
+     * Tiles nUp (2 or 4) input pages onto each output sheet.
+     * 2-up: landscape A4, side by side. 4-up: portrait A4, 2×2 grid.
+     * Renders input pages at 150 DPI; aspect ratio is preserved within each cell.
+     */
+    public static byte[] nUpPdf(byte[] fileBytes, int nUp) throws IOException {
+        if (nUp != 2 && nUp != 4) nUp = 2;
+        try (PDDocument src = Loader.loadPDF(fileBytes);
+             PDDocument out = new PDDocument();
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            PDFRenderer renderer = new PDFRenderer(src);
+            int total = src.getNumberOfPages();
+            int cols = 2;
+            int rows = nUp == 4 ? 2 : 1;
+            float outW = nUp == 4 ? 595f : 842f;
+            float outH = nUp == 4 ? 842f : 595f;
+            float cellW = outW / cols;
+            float cellH = outH / rows;
+
+            for (int i = 0; i < total; i += nUp) {
+                PDPage outPage = new PDPage(new PDRectangle(outW, outH));
+                out.addPage(outPage);
+                try (PDPageContentStream cs = new PDPageContentStream(out, outPage)) {
+                    for (int j = 0; j < nUp && i + j < total; j++) {
+                        BufferedImage img = renderer.renderImageWithDPI(i + j, 150);
+                        PDImageXObject pdImg = LosslessFactory.createFromImage(out, img);
+                        int col = j % cols;
+                        int row = j / cols;
+                        float x = col * cellW;
+                        float y = outH - (row + 1) * cellH;
+                        float imgAspect = (float) img.getWidth() / img.getHeight();
+                        float cellAspect = cellW / cellH;
+                        float drawW, drawH;
+                        if (imgAspect > cellAspect) {
+                            drawW = cellW;
+                            drawH = cellW / imgAspect;
+                        } else {
+                            drawH = cellH;
+                            drawW = cellH * imgAspect;
+                        }
+                        cs.drawImage(pdImg, x + (cellW - drawW) / 2f, y + (cellH - drawH) / 2f, drawW, drawH);
+                    }
+                }
+            }
+            out.save(baos);
+            return baos.toByteArray();
+        }
+    }
+
     public static byte[] mergePdf(String outputFileName, List<MultipartFile> files) throws Exception {
         PDFMergerUtility merger = new PDFMergerUtility();
         merger.setDestinationFileName(outputFileName);
