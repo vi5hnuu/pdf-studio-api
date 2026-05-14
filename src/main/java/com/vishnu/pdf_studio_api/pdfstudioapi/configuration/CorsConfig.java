@@ -20,14 +20,16 @@ public class CorsConfig implements WebMvcConfigurer {
 
         String[] allowedOrigins;
 
-        if (Arrays.asList(environment.getActiveProfiles()).contains("dev")) {
-            allowedOrigins = new String[]{
-                    "http://localhost:3000",
-            };
-        } else {
+        // Allow localhost when running locally (no profile or explicit "dev"); restrict to prod domains only in "prod"
+        if (Arrays.asList(environment.getActiveProfiles()).contains("prod")) {
             allowedOrigins = new String[]{
                     "https://pdf-studio.laxmi.solutions",
                     "https://pdf-studio-vi.onrender.com"
+            };
+        } else {
+            allowedOrigins = new String[]{
+                    "http://localhost:3000",
+                    "http://localhost:3001",
             };
         }
 
