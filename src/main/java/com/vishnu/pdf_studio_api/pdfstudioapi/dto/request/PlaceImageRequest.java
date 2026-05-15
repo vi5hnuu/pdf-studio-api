@@ -1,5 +1,6 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import lombok.AllArgsConstructor;
@@ -22,7 +23,12 @@ import lombok.Setter;
 public class PlaceImageRequest {
     private String outFileName;
     private int page;
+    // @JsonProperty needed: Lombok generates getXFrac() → Java bean property "XFrac"
+    // (two consecutive uppercase chars suppress decapitalization) → SnakeCaseStrategy produces
+    // "xfrac" instead of the intended "x_frac". Explicit annotation overrides this.
+    @JsonProperty("x_frac")
     private float xFrac;
+    @JsonProperty("y_frac")
     private float yFrac;
     private float widthFrac;
     private float heightFrac;
