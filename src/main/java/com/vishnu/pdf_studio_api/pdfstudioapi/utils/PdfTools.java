@@ -850,13 +850,13 @@ public class PdfTools {
      * Reads the document outline (bookmarks) and returns a flat list of bookmark maps
      * with keys: title, pageIndex, children (recursive).
      */
-    public static List<Map<String, Object>> getBookmarks(PDDocument doc) {
+    public static List<Map<String, Object>> getBookmarks(PDDocument doc) throws IOException {
         PDDocumentOutline outline = doc.getDocumentCatalog().getDocumentOutline();
         if (outline == null) return List.of();
         return collectOutlineItems(outline.getFirstChild(), doc);
     }
 
-    private static List<Map<String, Object>> collectOutlineItems(PDOutlineItem item, PDDocument doc) {
+    private static List<Map<String, Object>> collectOutlineItems(PDOutlineItem item, PDDocument doc) throws IOException {
         List<Map<String, Object>> result = new ArrayList<>();
         while (item != null) {
             Map<String, Object> entry = new java.util.LinkedHashMap<>();
