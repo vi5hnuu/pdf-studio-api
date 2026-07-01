@@ -847,6 +847,32 @@ public class PdfTools {
     }
 
     /**
+     * Duplicates pages with an independent copy count per page.
+     * {@code pageCounts} maps a 0-indexed page number to the number of extra
+     * copies to insert directly after it (0/absent = leave as-is).
+     */
+    public static byte[] duplicatePages(byte[] fileBytes, Map<Integer, Integer> pageCounts) throws IOException {
+        try (PDDocument src = Loader.loadPDF(fileBytes);
+             PDDocument out = new PDDocument();
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+            int total = src.getNumberOfPages();
+            for (int i = 0; i < total; i++) {
+                out.importPage(src.getPage(i));
+                Integer copies = pageCounts.get(i);
+                if (copies != null) {
+                    for (int c = 0; c < copies; c++) {
+                        out.importPage(src.getPage(i));
+                    }
+                }
+            }
+
+            out.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    /**
      * Reads the document outline (bookmarks) and returns a flat list of bookmark maps
      * with keys: title, pageIndex, children (recursive).
      */

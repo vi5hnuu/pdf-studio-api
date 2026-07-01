@@ -386,11 +386,11 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> duplicatePages(String outFileName, List<Integer> pages, Integer count, MultipartFile file) {
+    public ResponseEntity<Resource> duplicatePages(String outFileName, java.util.Map<Integer, Integer> pageCounts, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "duplicated-pdf";
-        if (count == null || count < 1) count = 1;
+        if (pageCounts == null) pageCounts = java.util.Collections.emptyMap();
         try {
-            byte[] doc = PdfTools.duplicatePages(file.getBytes(), pages, count);
+            byte[] doc = PdfTools.duplicatePages(file.getBytes(), pageCounts);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));

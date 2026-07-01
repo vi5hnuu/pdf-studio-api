@@ -188,7 +188,16 @@ public class PdfController {
     public ResponseEntity<Resource> duplicatePages(
             @RequestPart("duplicate-pages-info") DuplicatePagesRequest req,
             @RequestPart("file") MultipartFile file) {
-        return pdfService.duplicatePages(req.getOutFileName(), req.getPages(), req.getCount(), file);
+        // Prefer per-page counts; fall back to the legacy flat pages + count pair.
+        java.util.Map<Integer, Integer> counts = req.getPageCounts();
+        if (counts == null || counts.isEmpty()) {
+            counts = new java.util.HashMap<>();
+            int c = (req.getCount() == null || req.getCount() < 1) ? 1 : req.getCount();
+            if (req.getPages() != null) {
+                for (Integer p : req.getPages()) counts.put(p, c);
+            }
+        }
+        return pdfService.duplicatePages(req.getOutFileName(), counts, file);
     }
 
     /** Returns the PDF bookmark/outline tree as JSON — no file download. */
