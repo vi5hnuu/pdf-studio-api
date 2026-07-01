@@ -402,6 +402,24 @@ public class PdfService {
         }
     }
 
+    /** Adds real fillable AcroForm fields to a PDF from the supplied field specs. */
+    public ResponseEntity<Resource> createForm(String outFileName,
+                                               java.util.List<com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.CreateFormRequest.FormFieldSpec> fields,
+                                               MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "fillable-form";
+        try {
+            byte[] doc = PdfTools.createForm(file.getBytes(), fields);
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.ok().headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     /** Returns the bookmark tree as JSON — does not produce a file download. */
     public ResponseEntity<?> getBookmarks(MultipartFile file) {
         try (PDDocument doc = Loader.loadPDF(file.getBytes())) {

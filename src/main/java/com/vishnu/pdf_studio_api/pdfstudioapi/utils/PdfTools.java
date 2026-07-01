@@ -14,6 +14,14 @@ import org.apache.pdfbox.pdmodel.*;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
+import org.apache.pdfbox.pdmodel.interactive.form.PDField;
+import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
+import org.apache.pdfbox.pdmodel.interactive.form.PDCheckBox;
+import org.apache.pdfbox.pdmodel.interactive.form.PDComboBox;
+import org.apache.pdfbox.pdmodel.interactive.form.PDRadioButton;
+import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.CreateFormRequest.FormFieldSpec;
 import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
 import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.apache.pdfbox.pdmodel.font.PDFont;
@@ -870,6 +878,153 @@ public class PdfTools {
             out.save(baos, CompressParameters.NO_COMPRESSION);
             return baos.toByteArray();
         }
+    }
+
+    /**
+     * Turns a PDF into a fillable form by adding real interactive AcroForm
+     * fields. Supported types: text, multiline, date (a text field), checkbox,
+     * dropdown, radio (grouped by field name) and signature. Coordinates arrive
+     * top-left origin in PDF points and are flipped to PDFBox's bottom-left.
+     *
+     * NeedAppearances is enabled so readers generate field appearances; some
+     * mobile viewers render these more faithfully than others.
+     */
+    public static byte[] createForm(byte[] fileBytes, List<FormFieldSpec> specs) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(fileBytes);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+            PDAcroForm acro = new PDAcroForm(doc);
+            doc.getDocumentCatalog().setAcroForm(acro);
+
+            PDFont font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
+            PDResources dr = new PDResources();
+            dr.put(COSName.getPDFName("Helv"), font);
+            acro.setDefaultResources(dr);
+            acro.setDefaultAppearance("/Helv 0 Tf 0 g");
+            acro.setNeedAppearances(true);
+
+            if (specs == null) specs = new ArrayList<>();
+
+            // Radio options share one field, grouped by name; everything else is standalone.
+            Map<String, List<FormFieldSpec>> radioGroups = new LinkedHashMap<>();
+            List<FormFieldSpec> singles = new ArrayList<>();
+            for (FormFieldSpec f : specs) {
+                if ("radio".equalsIgnoreCase(f.getType())) {
+                    radioGroups.computeIfAbsent(safeName(f.getName(), "radio"), k -> new ArrayList<>()).add(f);
+                } else {
+                    singles.add(f);
+                }
+            }
+
+            int auto = 0;
+            for (FormFieldSpec f : singles) {
+                String type = f.getType() == null ? "text" : f.getType().toLowerCase();
+                String name = safeName(f.getName(), type + "_" + (auto++));
+                PDPage page = doc.getPage(clampPage(f.getPage(), doc));
+                PDRectangle rect = toRect(f, page);
+
+                switch (type) {
+                    case "checkbox": {
+                        PDCheckBox cb = new PDCheckBox(acro);
+                        cb.setPartialName(name);
+                        acro.getFields().add(cb);
+                        placeWidget(cb, page, rect);
+                        if (Boolean.TRUE.equals(f.getRequired())) cb.setRequired(true);
+                        try {
+                            if (isTruthy(f.getValue())) cb.check(); else cb.unCheck();
+                        } catch (Exception ignore) { /* appearance-dependent */ }
+                        break;
+                    }
+                    case "dropdown": {
+                        PDComboBox combo = new PDComboBox(acro);
+                        combo.setPartialName(name);
+                        acro.getFields().add(combo);
+                        if (f.getOptions() != null && !f.getOptions().isEmpty()) combo.setOptions(f.getOptions());
+                        placeWidget(combo, page, rect);
+                        if (f.getValue() != null && !f.getValue().isBlank()) {
+                            try { combo.setValue(f.getValue()); } catch (Exception ignore) {}
+                        }
+                        break;
+                    }
+                    case "signature": {
+                        PDSignatureField sig = new PDSignatureField(acro);
+                        sig.setPartialName(name);
+                        acro.getFields().add(sig);
+                        placeWidget(sig, page, rect);
+                        break;
+                    }
+                    default: { // text, multiline, date
+                        PDTextField tf = new PDTextField(acro);
+                        tf.setPartialName(name);
+                        acro.getFields().add(tf);
+                        if ("multiline".equals(type)) tf.setMultiline(true);
+                        float fs = f.getFontSize() == null ? 0f : f.getFontSize();
+                        tf.setDefaultAppearance("/Helv " + fs + " Tf 0 g");
+                        placeWidget(tf, page, rect);
+                        if (Boolean.TRUE.equals(f.getRequired())) tf.setRequired(true);
+                        if (f.getValue() != null && !f.getValue().isBlank()) {
+                            try { tf.setValue(f.getValue()); } catch (Exception ignore) {}
+                        }
+                    }
+                }
+            }
+
+            for (Map.Entry<String, List<FormFieldSpec>> e : radioGroups.entrySet()) {
+                PDRadioButton radio = new PDRadioButton(acro);
+                radio.setPartialName(e.getKey());
+                acro.getFields().add(radio);
+
+                List<PDAnnotationWidget> widgets = new ArrayList<>();
+                List<String> exports = new ArrayList<>();
+                int idx = 0;
+                for (FormFieldSpec f : e.getValue()) {
+                    PDPage page = doc.getPage(clampPage(f.getPage(), doc));
+                    PDAnnotationWidget w = new PDAnnotationWidget();
+                    w.setRectangle(toRect(f, page));
+                    w.setPage(page);
+                    w.setPrinted(true);
+                    // Link the widget to its parent radio field.
+                    w.getCOSObject().setItem(COSName.PARENT, radio.getCOSObject());
+                    page.getAnnotations().add(w);
+                    widgets.add(w);
+                    exports.add(safeName(f.getExportValue(), "opt" + idx));
+                    idx++;
+                }
+                radio.setWidgets(widgets);
+                try { radio.setExportValues(exports); } catch (Exception ignore) {}
+            }
+
+            doc.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    private static String safeName(String v, String fallback) {
+        return (v == null || v.isBlank()) ? fallback : v.trim();
+    }
+
+    private static boolean isTruthy(String v) {
+        return v != null && (v.equalsIgnoreCase("true") || v.equalsIgnoreCase("on") || v.equalsIgnoreCase("yes") || v.equals("1"));
+    }
+
+    private static int clampPage(int p, PDDocument doc) {
+        return Math.max(0, Math.min(p, doc.getNumberOfPages() - 1));
+    }
+
+    // Converts a top-left-origin rect (PDF points) to a PDFBox bottom-left rect.
+    private static PDRectangle toRect(FormFieldSpec f, PDPage page) {
+        float ph = page.getMediaBox().getHeight();
+        float pdfY = ph - f.getY() - f.getHeight();
+        return new PDRectangle(f.getX(), pdfY, f.getWidth(), f.getHeight());
+    }
+
+    // Positions a single-widget terminal field's widget on a page.
+    private static void placeWidget(PDField field, PDPage page, PDRectangle rect) throws IOException {
+        PDAnnotationWidget w = field.getWidgets().get(0);
+        w.setRectangle(rect);
+        w.setPage(page);
+        w.setPrinted(true);
+        page.getAnnotations().add(w);
     }
 
     /**

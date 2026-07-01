@@ -200,6 +200,14 @@ public class PdfController {
         return pdfService.duplicatePages(req.getOutFileName(), counts, file);
     }
 
+    /** Turns a PDF into a fillable form by adding real AcroForm fields. */
+    @PostMapping(value = "/create-form", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> createForm(
+            @RequestPart("create-form-info") CreateFormRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return pdfService.createForm(req.getOutFileName(), req.getFields(), file);
+    }
+
     /** Returns the PDF bookmark/outline tree as JSON — no file download. */
     @PostMapping(value = "/get-bookmarks", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> getBookmarks(@RequestPart("file") MultipartFile file) {
