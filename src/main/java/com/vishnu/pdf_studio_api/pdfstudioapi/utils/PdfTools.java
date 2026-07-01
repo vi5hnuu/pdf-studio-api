@@ -1705,14 +1705,17 @@ public class PdfTools {
     /**
      * Tiles nUp (2 or 4) input pages onto each output sheet.
      * 2-up: landscape A4, side by side. 4-up: portrait A4, 2×2 grid.
-     * Renders input pages at 150 DPI; aspect ratio is preserved within each cell.
+     *
+     * Places each input page as a **vector form** (LayerUtility.importPageAsForm)
+     * rather than a rasterised image, so text stays selectable/searchable and the
+     * output stays crisp and small. Aspect ratio is preserved within each cell.
      */
     public static byte[] nUpPdf(byte[] fileBytes, int nUp) throws IOException {
         if (nUp != 2 && nUp != 4) nUp = 2;
         try (PDDocument src = Loader.loadPDF(fileBytes);
              PDDocument out = new PDDocument();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-            PDFRenderer renderer = new PDFRenderer(src);
+            LayerUtility lu = new LayerUtility(out);
             int total = src.getNumberOfPages();
             int cols = 2;
             int rows = nUp == 4 ? 2 : 1;
@@ -1726,27 +1729,28 @@ public class PdfTools {
                 out.addPage(outPage);
                 try (PDPageContentStream cs = new PDPageContentStream(out, outPage)) {
                     for (int j = 0; j < nUp && i + j < total; j++) {
-                        BufferedImage img = renderer.renderImageWithDPI(i + j, 150);
-                        PDImageXObject pdImg = LosslessFactory.createFromImage(out, img);
+                        PDRectangle box = src.getPage(i + j).getCropBox();
+                        PDFormXObject form = lu.importPageAsForm(src, i + j);
                         int col = j % cols;
                         int row = j / cols;
                         float x = col * cellW;
                         float y = outH - (row + 1) * cellH;
-                        float imgAspect = (float) img.getWidth() / img.getHeight();
-                        float cellAspect = cellW / cellH;
-                        float drawW, drawH;
-                        if (imgAspect > cellAspect) {
-                            drawW = cellW;
-                            drawH = cellW / imgAspect;
-                        } else {
-                            drawH = cellH;
-                            drawW = cellH * imgAspect;
-                        }
-                        cs.drawImage(pdImg, x + (cellW - drawW) / 2f, y + (cellH - drawH) / 2f, drawW, drawH);
+                        float sw = box.getWidth(), sh = box.getHeight();
+                        float scale = Math.min(cellW / sw, cellH / sh);
+                        float drawW = sw * scale, drawH = sh * scale;
+                        float tx = x + (cellW - drawW) / 2f;
+                        float ty = y + (cellH - drawH) / 2f;
+                        cs.saveGraphicsState();
+                        // Scale the page-form into the cell, offsetting for the crop-box origin.
+                        cs.transform(new Matrix(scale, 0, 0, scale,
+                                tx - box.getLowerLeftX() * scale,
+                                ty - box.getLowerLeftY() * scale));
+                        cs.drawForm(form);
+                        cs.restoreGraphicsState();
                     }
                 }
             }
-            out.save(baos);
+            out.save(baos, CompressParameters.NO_COMPRESSION);
             return baos.toByteArray();
         }
     }
