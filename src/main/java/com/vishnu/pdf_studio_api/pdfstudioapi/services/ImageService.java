@@ -15,6 +15,7 @@ import javax.imageio.*;
 import javax.imageio.plugins.jpeg.JPEGImageWriteParam;
 import javax.imageio.stream.ImageOutputStream;
 import java.awt.*;
+import java.awt.geom.AffineTransform;
 import java.awt.geom.Point2D;
 import java.awt.image.*;
 import java.io.ByteArrayOutputStream;
@@ -263,6 +264,95 @@ public class ImageService {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    // ── Rotate / Flip / Border ──────────────────────────────────────────────────
+
+    /** Rotates the image by 0 / 90 / 180 / 270 degrees clockwise. */
+    public ResponseEntity<Resource> rotateImage(RotateImageRequest req, MultipartFile file) {
+        if (req == null) req = new RotateImageRequest();
+        try {
+            int angle = ((req.getAngle() == null ? 0 : req.getAngle()) % 360 + 360) % 360;
+            angle = (angle / 90) * 90; // snap to 90° steps
+            BufferedImage src = readImage(file);
+            BufferedImage out = src;
+            if (angle != 0) {
+                int w = src.getWidth(), h = src.getHeight();
+                boolean swap = angle == 90 || angle == 270;
+                out = new BufferedImage(swap ? h : w, swap ? w : h, BufferedImage.TYPE_INT_ARGB);
+                Graphics2D g = out.createGraphics();
+                g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+                AffineTransform at = new AffineTransform();
+                at.translate((out.getWidth() - w) / 2.0, (out.getHeight() - h) / 2.0);
+                at.rotate(Math.toRadians(angle), w / 2.0, h / 2.0);
+                g.drawImage(src, at, null);
+                g.dispose();
+            }
+            return outputImage(out, file, req.getOutFileName(), "_rotated");
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to rotate image: " + e.getMessage(), e);
+        }
+    }
+
+    /** Flips the image horizontally or vertically. */
+    public ResponseEntity<Resource> flipImage(FlipImageRequest req, MultipartFile file) {
+        if (req == null) req = new FlipImageRequest();
+        try {
+            boolean horizontal = req.getDirection() == null || req.getDirection().equalsIgnoreCase("HORIZONTAL");
+            BufferedImage src = readImage(file);
+            int w = src.getWidth(), h = src.getHeight();
+            BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = out.createGraphics();
+            AffineTransform at = horizontal
+                    ? new AffineTransform(-1, 0, 0, 1, w, 0)
+                    : new AffineTransform(1, 0, 0, -1, 0, h);
+            g.drawImage(src, at, null);
+            g.dispose();
+            return outputImage(out, file, req.getOutFileName(), "_flipped");
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to flip image: " + e.getMessage(), e);
+        }
+    }
+
+    /** Draws a solid border of the given width and colour around the image. */
+    public ResponseEntity<Resource> addBorder(BorderImageRequest req, MultipartFile file) {
+        if (req == null) req = new BorderImageRequest();
+        try {
+            int bw = Math.max(0, req.getWidth() == null ? 20 : req.getWidth());
+            Color color = new Color(
+                    clamp(req.getR()), clamp(req.getG()), clamp(req.getB()));
+            BufferedImage src = readImage(file);
+            int w = src.getWidth() + 2 * bw, h = src.getHeight() + 2 * bw;
+            BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = out.createGraphics();
+            g.setColor(color);
+            g.fillRect(0, 0, w, h);
+            g.drawImage(src, bw, bw, null);
+            g.dispose();
+            return outputImage(out, file, req.getOutFileName(), "_bordered");
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to add border: " + e.getMessage(), e);
+        }
+    }
+
+    private int clamp(Integer v) {
+        int x = v == null ? 0 : v;
+        return Math.max(0, Math.min(255, x));
+    }
+
+    // Encodes to JPEG for JPEG input (keeps things small), else PNG (keeps alpha).
+    private ResponseEntity<Resource> outputImage(BufferedImage img, MultipartFile file, String outName, String suffix) throws IOException {
+        String name = file.getOriginalFilename();
+        boolean isJpeg = name != null &&
+                (name.toLowerCase().endsWith(".jpg") || name.toLowerCase().endsWith(".jpeg"));
+        String outFileName = defaultName(outName, stripExtension(name) + suffix);
+        if (isJpeg) {
+            byte[] bytes = encodeJpeg(toRgb(img), 92);
+            return fileResponse(bytes, outFileName + ".jpg", "image/jpeg");
+        }
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ImageIO.write(img, "PNG", baos);
+        return fileResponse(baos.toByteArray(), outFileName + ".png", "image/png");
+    }
 
     private BufferedImage readImage(MultipartFile file) throws IOException {
         BufferedImage img = ImageIO.read(file.getInputStream());

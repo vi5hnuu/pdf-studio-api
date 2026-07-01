@@ -57,4 +57,28 @@ public class ImageController {
             @RequestPart("file") MultipartFile file) {
         return imageService.applyFilter(req, file);
     }
+
+    /** Rotate an image by 0 / 90 / 180 / 270 degrees. */
+    @PostMapping(value = "/rotate-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> rotateImage(
+            @RequestPart(value = "rotate-image-info", required = false) RotateImageRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return imageService.rotateImage(req, file);
+    }
+
+    /** Flip an image horizontally or vertically. */
+    @PostMapping(value = "/flip-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> flipImage(
+            @RequestPart(value = "flip-image-info", required = false) FlipImageRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return imageService.flipImage(req, file);
+    }
+
+    /** Add a solid coloured border around an image. */
+    @PostMapping(value = "/border-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> borderImage(
+            @RequestPart(value = "border-image-info", required = false) BorderImageRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return imageService.addBorder(req, file);
+    }
 }
