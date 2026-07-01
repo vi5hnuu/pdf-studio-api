@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.multipdf.LayerUtility;
 import org.apache.pdfbox.multipdf.PDFMergerUtility;
+import org.apache.pdfbox.multipdf.Splitter;
 import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
 import org.apache.pdfbox.pdmodel.*;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
@@ -50,6 +51,7 @@ import javax.imageio.ImageWriteParam;
 import javax.imageio.stream.MemoryCacheImageOutputStream;
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import org.apache.pdfbox.io.RandomAccessReadBuffer;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
@@ -892,6 +894,105 @@ public class PdfTools {
             doc.getDocumentCatalog().setMetadata(null);
             doc.save(baos, CompressParameters.NO_COMPRESSION);
             return baos.toByteArray();
+        }
+    }
+
+    /** Extracts embedded raster images from every page and returns them zipped as PNGs. */
+    public static byte[] extractImages(byte[] fileBytes) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(fileBytes);
+             ByteArrayOutputStream zipBaos = new ByteArrayOutputStream();
+             ZipOutputStream zip = new ZipOutputStream(zipBaos)) {
+            int count = 0;
+            for (PDPage page : doc.getPages()) {
+                PDResources res = page.getResources();
+                if (res == null) continue;
+                for (COSName name : res.getXObjectNames()) {
+                    try {
+                        PDXObject xobj = res.getXObject(name);
+                        if (xobj instanceof PDImageXObject img) {
+                            BufferedImage bi = img.getImage();
+                            if (bi == null) continue;
+                            count++;
+                            ByteArrayOutputStream imgBaos = new ByteArrayOutputStream();
+                            ImageIO.write(bi, "png", imgBaos);
+                            zip.putNextEntry(new ZipEntry("image_" + count + ".png"));
+                            zip.write(imgBaos.toByteArray());
+                            zip.closeEntry();
+                        }
+                    } catch (Exception ignore) {
+                        // Skip images PDFBox/ImageIO can't decode (e.g. exotic colour spaces).
+                    }
+                }
+            }
+            zip.finish();
+            if (count == 0) throw new IOException("No extractable images found in this PDF");
+            return zipBaos.toByteArray();
+        }
+    }
+
+    /**
+     * Removes potentially unsafe / tracking content: document-level JavaScript,
+     * embedded files, open/additional actions, and all metadata — leaving the
+     * visible page content intact.
+     */
+    public static byte[] sanitizePdf(byte[] fileBytes) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(fileBytes);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            PDDocumentCatalog cat = doc.getDocumentCatalog();
+            cat.setOpenAction(null);
+            COSDictionary catDict = cat.getCOSObject();
+            // The /Names tree holds JavaScript and EmbeddedFiles; /AA holds
+            // additional (event) actions. Dropping them removes active content.
+            catDict.removeItem(COSName.getPDFName("Names"));
+            catDict.removeItem(COSName.getPDFName("AA"));
+            catDict.removeItem(COSName.getPDFName("OpenAction"));
+            cat.setMetadata(null);
+            doc.setDocumentInformation(new PDDocumentInformation());
+            doc.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    /**
+     * Splits a PDF into multiple parts, each at most {@code maxBytes} in size,
+     * returned as a ZIP. Pages are measured individually and packed greedily; a
+     * single page larger than the limit becomes its own part.
+     */
+    public static byte[] splitBySize(byte[] fileBytes, long maxBytes) throws IOException {
+        try (PDDocument src = Loader.loadPDF(fileBytes)) {
+            // Splitter returns independent single-page documents (safe clones).
+            List<PDDocument> pages = new Splitter().split(src);
+            List<byte[]> pageBytes = new ArrayList<>();
+            for (PDDocument p : pages) {
+                ByteArrayOutputStream b = new ByteArrayOutputStream();
+                p.save(b, CompressParameters.NO_COMPRESSION);
+                pageBytes.add(b.toByteArray());
+                p.close();
+            }
+
+            ByteArrayOutputStream zipBaos = new ByteArrayOutputStream();
+            try (ZipOutputStream zip = new ZipOutputStream(zipBaos)) {
+                int i = 0, part = 0;
+                while (i < pageBytes.size()) {
+                    List<byte[]> group = new ArrayList<>();
+                    long acc = 0;
+                    while (i < pageBytes.size() && (group.isEmpty() || acc + pageBytes.get(i).length <= maxBytes)) {
+                        acc += pageBytes.get(i).length;
+                        group.add(pageBytes.get(i));
+                        i++;
+                    }
+                    PDFMergerUtility merger = new PDFMergerUtility();
+                    ByteArrayOutputStream chunk = new ByteArrayOutputStream();
+                    merger.setDestinationStream(chunk);
+                    for (byte[] pb : group) merger.addSource(new RandomAccessReadBuffer(pb));
+                    merger.mergeDocuments(null);
+                    part++;
+                    zip.putNextEntry(new ZipEntry("part_" + part + ".pdf"));
+                    zip.write(chunk.toByteArray());
+                    zip.closeEntry();
+                }
+            }
+            return zipBaos.toByteArray();
         }
     }
 

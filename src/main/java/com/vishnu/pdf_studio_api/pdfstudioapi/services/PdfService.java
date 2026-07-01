@@ -402,6 +402,52 @@ public class PdfService {
         }
     }
 
+    /** Extracts embedded images from a PDF and returns them as a ZIP. */
+    public ResponseEntity<Resource> extractImages(MultipartFile file) {
+        try {
+            byte[] zip = PdfTools.extractImages(file.getBytes());
+            return zipResponse(zip, "extracted-images");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Removes JavaScript, embedded files, actions and metadata from a PDF. */
+    public ResponseEntity<Resource> sanitizePdf(MultipartFile file) {
+        try {
+            byte[] doc = PdfTools.sanitizePdf(file.getBytes());
+            ByteArrayResource baR = new ByteArrayResource(doc);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=sanitized.pdf");
+            headers.setContentLength(doc.length);
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return ResponseEntity.ok().headers(headers).body(baR);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Splits a PDF into parts no larger than the given size, returned as a ZIP. */
+    public ResponseEntity<Resource> splitBySize(String outFileName, Double maxSizeMb, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "split-by-size";
+        double mb = (maxSizeMb == null || maxSizeMb <= 0) ? 5.0 : maxSizeMb;
+        try {
+            byte[] zip = PdfTools.splitBySize(file.getBytes(), (long) (mb * 1024 * 1024));
+            return zipResponse(zip, outFileName);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private ResponseEntity<Resource> zipResponse(byte[] zip, String name) {
+        ByteArrayResource baR = new ByteArrayResource(zip);
+        HttpHeaders headers = new HttpHeaders();
+        headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.zip", name));
+        headers.setContentLength(zip.length);
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        return ResponseEntity.ok().headers(headers).body(baR);
+    }
+
     /** Strips document info + XMP metadata from a PDF. */
     public ResponseEntity<Resource> removeMetadata(MultipartFile file) {
         try {

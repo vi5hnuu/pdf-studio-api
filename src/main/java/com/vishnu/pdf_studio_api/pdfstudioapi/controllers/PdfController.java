@@ -206,6 +206,27 @@ public class PdfController {
         return pdfService.removeMetadata(file);
     }
 
+    /** Extracts embedded images from a PDF, returned as a ZIP. */
+    @PostMapping(value = "/extract-images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> extractImages(@RequestPart("file") MultipartFile file) {
+        return pdfService.extractImages(file);
+    }
+
+    /** Removes JavaScript, embedded files, actions and metadata from a PDF. */
+    @PostMapping(value = "/sanitize-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> sanitizePdf(@RequestPart("file") MultipartFile file) {
+        return pdfService.sanitizePdf(file);
+    }
+
+    /** Splits a PDF into parts no larger than the requested size, returned as a ZIP. */
+    @PostMapping(value = "/split-by-size", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> splitBySize(
+            @RequestPart(value = "split-by-size-info", required = false) SplitBySizeRequest req,
+            @RequestPart("file") MultipartFile file) {
+        if (req == null) req = new SplitBySizeRequest();
+        return pdfService.splitBySize(req.getOutFileName(), req.getMaxSizeMb(), file);
+    }
+
     /** Turns a PDF into a fillable form by adding real AcroForm fields. */
     @PostMapping(value = "/create-form", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> createForm(
