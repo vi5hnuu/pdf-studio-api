@@ -1,5 +1,6 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import lombok.Getter;
@@ -13,5 +14,8 @@ import lombok.Setter;
 public class NUpRequest {
     private String outFileName;
     /** Pages per output sheet: 2 (landscape side-by-side) or 4 (portrait 2×2 grid). */
+    // Explicit binding — the field name "nUp" otherwise trips the Jackson/Lombok
+    // getNUp() -> "NUp" property quirk, so "n_up" could be ignored (defaulting to 2).
+    @JsonProperty("n_up")
     private int nUp = 2;
 }
