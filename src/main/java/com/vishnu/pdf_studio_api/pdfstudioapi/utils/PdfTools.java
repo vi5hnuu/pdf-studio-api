@@ -24,9 +24,14 @@ import org.apache.pdfbox.pdmodel.interactive.form.PDField;
 import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
 import org.apache.pdfbox.pdmodel.interactive.form.PDCheckBox;
 import org.apache.pdfbox.pdmodel.interactive.form.PDComboBox;
+import org.apache.pdfbox.pdmodel.interactive.form.PDListBox;
 import org.apache.pdfbox.pdmodel.interactive.form.PDRadioButton;
 import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceCharacteristicsDictionary;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDBorderStyleDictionary;
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.CreateFormRequest.FormFieldSpec;
 import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
 import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
@@ -1349,9 +1354,11 @@ public class PdfTools {
                         acro.getFields().add(cb);
                         placeWidget(cb, page, rect);
                         if (Boolean.TRUE.equals(f.getRequired())) cb.setRequired(true);
-                        try {
-                            if (isTruthy(f.getValue())) cb.check(); else cb.unCheck();
-                        } catch (Exception ignore) { /* appearance-dependent */ }
+                        boolean on = Boolean.TRUE.equals(f.getChecked()) || isTruthy(f.getValue());
+                        // Build real On/Off appearance streams so the box renders and toggles.
+                        buildToggleAppearance(doc, cb.getWidgets().get(0), "Yes", false, on);
+                        cb.getCOSObject().setName(COSName.V, on ? "Yes" : "Off");
+                        cb.getCOSObject().setName(COSName.getPDFName("DV"), on ? "Yes" : "Off");
                         break;
                     }
                     case "dropdown": {
@@ -1395,24 +1402,160 @@ public class PdfTools {
 
                 List<PDAnnotationWidget> widgets = new ArrayList<>();
                 List<String> exports = new ArrayList<>();
+                String selected = "Off";
                 int idx = 0;
                 for (FormFieldSpec f : e.getValue()) {
                     PDPage page = doc.getPage(clampPage(f.getPage(), doc));
+                    // Export value doubles as the widget's on-state name (COSName-safe).
+                    String onState = safeName(f.getExportValue(), "opt" + idx).replaceAll("[^A-Za-z0-9_]", "_");
+                    boolean on = Boolean.TRUE.equals(f.getChecked());
+                    if (on) selected = onState;
+
                     PDAnnotationWidget w = new PDAnnotationWidget();
                     w.setRectangle(toRect(f, page));
                     w.setPage(page);
                     w.setPrinted(true);
-                    // Link the widget to its parent radio field.
                     w.getCOSObject().setItem(COSName.PARENT, radio.getCOSObject());
                     page.getAnnotations().add(w);
+                    buildToggleAppearance(doc, w, onState, true, on);
+
                     widgets.add(w);
-                    exports.add(safeName(f.getExportValue(), "opt" + idx));
+                    exports.add(onState);
                     idx++;
                 }
                 radio.setWidgets(widgets);
                 try { radio.setExportValues(exports); } catch (Exception ignore) {}
+                radio.getCOSObject().setName(COSName.V, selected);
             }
 
+            // Text and choice fields can be auto-generated; buttons we built above.
+            try { acro.refreshAppearances(); } catch (Exception ignore) {}
+
+            doc.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    /**
+     * Builds On + Off normal appearance streams for a checkbox/radio widget so it
+     * renders and toggles in any viewer (not just ones that honour NeedAppearances).
+     * ZapfDingbats "4" = check, "l" = filled circle.
+     */
+    private static void buildToggleAppearance(PDDocument doc, PDAnnotationWidget widget, String onState, boolean radio, boolean on) throws IOException {
+        PDRectangle r = widget.getRectangle();
+        float w = r.getWidth(), h = r.getHeight();
+        PDFont zapf = new PDType1Font(Standard14Fonts.FontName.ZAPF_DINGBATS);
+        float fontSize = Math.max(4f, Math.min(w, h) * 0.8f);
+        String glyph = radio ? "l" : "4";
+
+        // Visible border/box.
+        PDBorderStyleDictionary bs = new PDBorderStyleDictionary();
+        bs.setWidth(1);
+        bs.setStyle(PDBorderStyleDictionary.STYLE_SOLID);
+        widget.setBorderStyle(bs);
+        PDAppearanceCharacteristicsDictionary mk = new PDAppearanceCharacteristicsDictionary(new COSDictionary());
+        widget.getCOSObject().setItem(COSName.MK, mk.getCOSObject());
+
+        PDAppearanceStream onAp = buildToggleStream(doc, w, h, radio, glyph, zapf, fontSize, true);
+        PDAppearanceStream offAp = buildToggleStream(doc, w, h, radio, glyph, zapf, fontSize, false);
+
+        PDAppearanceDictionary ap = new PDAppearanceDictionary();
+        COSDictionary normal = new COSDictionary();
+        normal.setItem(COSName.getPDFName(onState), onAp.getCOSObject());
+        normal.setItem(COSName.Off, offAp.getCOSObject());
+        ap.getCOSObject().setItem(COSName.N, normal);
+        widget.setAppearance(ap);
+        widget.getCOSObject().setName(COSName.AS, on ? onState : "Off");
+    }
+
+    private static PDAppearanceStream buildToggleStream(PDDocument doc, float w, float h, boolean radio, String glyph, PDFont zapf, float fontSize, boolean drawGlyph) throws IOException {
+        PDAppearanceStream ap = new PDAppearanceStream(doc);
+        ap.setResources(new PDResources());
+        ap.setBBox(new PDRectangle(w, h));
+        try (PDPageContentStream cs = new PDPageContentStream(doc, ap)) {
+            cs.setLineWidth(1f);
+            if (radio) {
+                addCircle(cs, w / 2f, h / 2f, Math.min(w, h) / 2f - 0.75f);
+                cs.stroke();
+            } else {
+                cs.addRect(0.75f, 0.75f, w - 1.5f, h - 1.5f);
+                cs.stroke();
+            }
+            if (drawGlyph) {
+                float tw = zapf.getStringWidth(glyph) / 1000f * fontSize;
+                cs.beginText();
+                cs.setFont(zapf, fontSize);
+                cs.newLineAtOffset((w - tw) / 2f, (h - fontSize) / 2f + fontSize * 0.18f);
+                cs.showText(glyph);
+                cs.endText();
+            }
+        }
+        return ap;
+    }
+
+    // Approximates a circle with four bezier curves.
+    private static void addCircle(PDPageContentStream cs, float cx, float cy, float rad) throws IOException {
+        float k = 0.5523f * rad;
+        cs.moveTo(cx - rad, cy);
+        cs.curveTo(cx - rad, cy + k, cx - k, cy + rad, cx, cy + rad);
+        cs.curveTo(cx + k, cy + rad, cx + rad, cy + k, cx + rad, cy);
+        cs.curveTo(cx + rad, cy - k, cx + k, cy - rad, cx, cy - rad);
+        cs.curveTo(cx - k, cy - rad, cx - rad, cy - k, cx - rad, cy);
+        cs.closePath();
+    }
+
+    /** Lists a PDF's existing (terminal) AcroForm fields as JSON-friendly maps. */
+    public static List<Map<String, Object>> getFormFields(PDDocument doc) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        PDAcroForm form = doc.getDocumentCatalog().getAcroForm();
+        if (form == null) return result;
+        for (PDField field : form.getFieldTree()) {
+            if (!(field instanceof org.apache.pdfbox.pdmodel.interactive.form.PDTerminalField)) continue;
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("name", field.getFullyQualifiedName());
+            String type;
+            List<String> options = null;
+            if (field instanceof PDCheckBox) {
+                type = "checkbox";
+            } else if (field instanceof PDRadioButton rb) {
+                type = "radio";
+                options = new ArrayList<>(rb.getExportValues());
+            } else if (field instanceof PDComboBox cb) {
+                type = "dropdown";
+                options = cb.getOptions();
+            } else if (field instanceof PDListBox lb) {
+                type = "dropdown";
+                options = lb.getOptions();
+            } else if (field instanceof PDSignatureField) {
+                type = "signature";
+            } else {
+                type = "text";
+            }
+            m.put("type", type);
+            if (options != null) m.put("options", options);
+            try { m.put("value", field.getValueAsString()); } catch (Exception ignore) { m.put("value", ""); }
+            result.add(m);
+        }
+        return result;
+    }
+
+    /** Fills the given field values (by fully-qualified name), then flattens the form. */
+    public static byte[] fillFlatten(byte[] fileBytes, Map<String, String> values) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(fileBytes);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            PDAcroForm form = doc.getDocumentCatalog().getAcroForm();
+            if (form != null) {
+                form.setNeedAppearances(false);
+                if (values != null) {
+                    for (Map.Entry<String, String> e : values.entrySet()) {
+                        PDField field = form.getField(e.getKey());
+                        if (field == null || e.getValue() == null) continue;
+                        try { field.setValue(e.getValue()); } catch (Exception ignore) { /* incompatible value */ }
+                    }
+                }
+                try { form.refreshAppearances(); } catch (Exception ignore) {}
+                form.flatten();
+            }
             doc.save(baos, CompressParameters.NO_COMPRESSION);
             return baos.toByteArray();
         }

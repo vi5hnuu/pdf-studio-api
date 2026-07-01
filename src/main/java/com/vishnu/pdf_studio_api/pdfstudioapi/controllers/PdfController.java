@@ -292,6 +292,21 @@ public class PdfController {
         return pdfService.splitBySize(req.getOutFileName(), req.getMaxSizeMb(), file);
     }
 
+    /** Lists a PDF's existing AcroForm fields as JSON. */
+    @PostMapping(value = "/get-form-fields", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> getFormFields(@RequestPart("file") MultipartFile file) {
+        return pdfService.getFormFields(file);
+    }
+
+    /** Fills the supplied field values then flattens the form. */
+    @PostMapping(value = "/fill-flatten", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> fillFlatten(
+            @RequestPart(value = "fill-flatten-info", required = false) FillFlattenRequest req,
+            @RequestPart("file") MultipartFile file) {
+        if (req == null) req = new FillFlattenRequest();
+        return pdfService.fillFlatten(req.getOutFileName(), req.getValues(), file);
+    }
+
     /** Turns a PDF into a fillable form by adding real AcroForm fields. */
     @PostMapping(value = "/create-form", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> createForm(

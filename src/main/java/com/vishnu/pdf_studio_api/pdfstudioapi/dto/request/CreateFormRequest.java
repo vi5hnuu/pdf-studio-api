@@ -40,5 +40,6 @@ public class CreateFormRequest {
         private String exportValue;   // radio option value (per widget)
         private Float fontSize;        // text font size (0 = auto)
         private Boolean required;
+        private Boolean checked;       // checkbox / radio: on by default
     }
 }

@@ -539,6 +539,25 @@ public class PdfService {
         return ResponseEntity.ok().headers(headers).body(baR);
     }
 
+    /** Lists a PDF's existing AcroForm fields as JSON. */
+    public ResponseEntity<?> getFormFields(MultipartFile file) {
+        try (PDDocument doc = Loader.loadPDF(file.getBytes())) {
+            return ResponseEntity.ok(PdfTools.getFormFields(doc));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Fills the supplied field values, then flattens the form. */
+    public ResponseEntity<Resource> fillFlatten(String outFileName, java.util.Map<String, String> values, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "filled-flattened";
+        try {
+            return pdfResponse(PdfTools.fillFlatten(file.getBytes(), values), outFileName);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     /** Strips document info + XMP metadata from a PDF. */
     public ResponseEntity<Resource> removeMetadata(MultipartFile file) {
         try {
