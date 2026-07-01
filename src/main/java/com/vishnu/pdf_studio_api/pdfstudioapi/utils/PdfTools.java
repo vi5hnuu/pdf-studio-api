@@ -15,6 +15,8 @@ import org.apache.pdfbox.pdmodel.*;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.common.PDNameTreeNode;
+import org.apache.pdfbox.pdmodel.common.PDStream;
+import org.apache.pdfbox.pdmodel.font.PDFontDescriptor;
 import org.apache.pdfbox.pdmodel.common.filespecification.PDComplexFileSpecification;
 import org.apache.pdfbox.pdmodel.common.filespecification.PDEmbeddedFile;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
@@ -1150,6 +1152,149 @@ public class PdfTools {
         if (node.getKids() != null) {
             for (PDNameTreeNode<PDComplexFileSpecification> kid : node.getKids()) {
                 writeEmbeddedNode(kid, zip, count);
+            }
+        }
+    }
+
+    /**
+     * Produces a read-only analysis report: page/word/character counts, blank,
+     * duplicate and landscape page lists, embedded image/font/attachment counts
+     * and file size. Returns a plain map (serialised as JSON).
+     */
+    public static Map<String, Object> analyzePdf(byte[] fileBytes) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(fileBytes)) {
+            Map<String, Object> r = new LinkedHashMap<>();
+            int total = doc.getNumberOfPages();
+            r.put("pageCount", total);
+            r.put("fileSizeBytes", fileBytes.length);
+
+            PDFRenderer renderer = new PDFRenderer(doc);
+            PDFTextStripper stripper = new PDFTextStripper();
+            int chars = 0, words = 0;
+            List<Integer> landscape = new ArrayList<>();
+            List<Integer> blank = new ArrayList<>();
+            Map<String, List<Integer>> hashes = new LinkedHashMap<>();
+
+            for (int i = 0; i < total; i++) {
+                PDRectangle box = doc.getPage(i).getMediaBox();
+                if (box.getWidth() > box.getHeight()) landscape.add(i + 1);
+
+                stripper.setStartPage(i + 1);
+                stripper.setEndPage(i + 1);
+                String pageText = stripper.getText(doc);
+                chars += pageText.length();
+                String trimmed = pageText.trim();
+                if (!trimmed.isEmpty()) words += trimmed.split("\\s+").length;
+
+                try {
+                    BufferedImage img = renderer.renderImageWithDPI(i, 72, ImageType.GRAY);
+                    if (isBlankPage(img, 0.99f)) blank.add(i + 1);
+                } catch (Exception ignore) { /* skip un-renderable page */ }
+
+                long contentLen = 0;
+                try (var cs = doc.getPage(i).getContents()) {
+                    if (cs != null) contentLen = cs.readAllBytes().length;
+                } catch (Exception ignore) { /* no content */ }
+                String h = pageText.hashCode() + "_" + contentLen;
+                hashes.computeIfAbsent(h, k -> new ArrayList<>()).add(i + 1);
+            }
+            r.put("wordCount", words);
+            r.put("characterCount", chars);
+            r.put("landscapePages", landscape);
+            r.put("blankPages", blank);
+
+            List<List<Integer>> dupGroups = new ArrayList<>();
+            for (List<Integer> g : hashes.values()) if (g.size() > 1) dupGroups.add(g);
+            r.put("duplicatePageGroups", dupGroups);
+
+            int imageCount = 0, fontCount = 0;
+            for (PDPage page : doc.getPages()) {
+                PDResources res = page.getResources();
+                if (res == null) continue;
+                for (COSName n : res.getXObjectNames()) {
+                    try {
+                        if (res.getXObject(n) instanceof PDImageXObject) imageCount++;
+                    } catch (Exception ignore) {}
+                }
+                for (COSName ignored : res.getFontNames()) fontCount++;
+            }
+            r.put("imageCount", imageCount);
+            r.put("fontCount", fontCount);
+
+            int attachments = 0;
+            PDDocumentNameDictionary names = doc.getDocumentCatalog().getNames();
+            if (names != null && names.getEmbeddedFiles() != null && names.getEmbeddedFiles().getNames() != null) {
+                attachments = names.getEmbeddedFiles().getNames().size();
+            }
+            r.put("attachmentCount", attachments);
+            r.put("encrypted", doc.isEncrypted());
+            return r;
+        }
+    }
+
+    /**
+     * Replaces base pages {@code from}..{@code to} (1-indexed, inclusive) with all
+     * pages of {@code replBytes}. Splices via single-page clones + merge.
+     */
+    public static byte[] replacePages(byte[] baseBytes, byte[] replBytes, int from, int to) throws IOException {
+        List<byte[]> basePages = pagesToBytes(baseBytes);
+        List<byte[]> replPages = pagesToBytes(replBytes);
+        int n = basePages.size();
+        int f = Math.max(1, Math.min(from, n));
+        int t = Math.max(f, Math.min(to, n));
+
+        List<byte[]> ordered = new ArrayList<>();
+        for (int i = 0; i < f - 1; i++) ordered.add(basePages.get(i)); // pages before the range
+        ordered.addAll(replPages);                                     // the replacement
+        for (int i = t; i < n; i++) ordered.add(basePages.get(i));     // pages after the range
+
+        PDFMergerUtility merger = new PDFMergerUtility();
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        merger.setDestinationStream(baos);
+        for (byte[] pb : ordered) merger.addSource(new RandomAccessReadBuffer(pb));
+        merger.mergeDocuments(null);
+        return baos.toByteArray();
+    }
+
+    /** Extracts embedded font programs (page + AcroForm resources) into a ZIP. */
+    public static byte[] extractFonts(byte[] fileBytes) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(fileBytes);
+             ByteArrayOutputStream zipBaos = new ByteArrayOutputStream();
+             ZipOutputStream zip = new ZipOutputStream(zipBaos)) {
+            int[] count = {0};
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            for (PDPage page : doc.getPages()) extractFontsFromResources(page.getResources(), zip, count, seen);
+            PDAcroForm form = doc.getDocumentCatalog().getAcroForm();
+            if (form != null) extractFontsFromResources(form.getDefaultResources(), zip, count, seen);
+            zip.finish();
+            if (count[0] == 0) throw new IOException("This PDF has no embedded fonts");
+            return zipBaos.toByteArray();
+        }
+    }
+
+    private static void extractFontsFromResources(PDResources res, ZipOutputStream zip, int[] count, java.util.Set<String> seen) {
+        if (res == null) return;
+        for (COSName name : res.getFontNames()) {
+            try {
+                PDFont font = res.getFont(name);
+                if (font == null) continue;
+                PDFontDescriptor fd = font.getFontDescriptor();
+                if (fd == null) continue;
+                PDStream ff = null;
+                String ext = "";
+                if (fd.getFontFile2() != null) { ff = fd.getFontFile2(); ext = ".ttf"; }
+                else if (fd.getFontFile3() != null) { ff = fd.getFontFile3(); ext = ".otf"; }
+                else if (fd.getFontFile() != null) { ff = fd.getFontFile(); ext = ".pfb"; }
+                if (ff == null) continue;
+                String base = font.getName() != null ? font.getName() : ("font_" + (count[0] + 1));
+                base = base.replaceAll("[^a-zA-Z0-9._-]", "_");
+                if (!seen.add(base + ext)) continue; // de-dupe repeated fonts
+                count[0]++;
+                zip.putNextEntry(new ZipEntry(base + ext));
+                zip.write(ff.toByteArray());
+                zip.closeEntry();
+            } catch (Exception ignore) {
+                // Skip fonts that can't be read.
             }
         }
     }

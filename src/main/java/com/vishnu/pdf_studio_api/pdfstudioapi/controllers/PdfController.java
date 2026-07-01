@@ -212,6 +212,28 @@ public class PdfController {
         return pdfService.extractImages(file);
     }
 
+    /** Returns a JSON analysis report for a PDF. */
+    @PostMapping(value = "/analyze-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> analyzePdf(@RequestPart("file") MultipartFile file) {
+        return pdfService.analyzePdf(file);
+    }
+
+    /** Replaces a page range in the base with the pages of a second PDF. */
+    @PostMapping(value = "/replace-pages", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> replacePages(
+            @RequestPart(value = "replace-pages-info", required = false) ReplacePagesRequest req,
+            @RequestPart("file") MultipartFile file,
+            @RequestPart("replacement") MultipartFile replacement) {
+        if (req == null) req = new ReplacePagesRequest();
+        return pdfService.replacePages(req.getOutFileName(), req.getFrom(), req.getTo(), file, replacement);
+    }
+
+    /** Extracts embedded font programs from a PDF, returned as a ZIP. */
+    @PostMapping(value = "/extract-fonts", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> extractFonts(@RequestPart("file") MultipartFile file) {
+        return pdfService.extractFonts(file);
+    }
+
     /** Flips pages horizontally or vertically. */
     @PostMapping(value = "/mirror-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> mirrorPdf(

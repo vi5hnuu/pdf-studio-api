@@ -402,6 +402,37 @@ public class PdfService {
         }
     }
 
+    /** Returns a JSON analysis report (page/word counts, blank/duplicate/landscape pages, etc.). */
+    public ResponseEntity<?> analyzePdf(MultipartFile file) {
+        try {
+            return ResponseEntity.ok(PdfTools.analyzePdf(file.getBytes()));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Replaces a page range in the base with the pages of a second PDF. */
+    public ResponseEntity<Resource> replacePages(String outFileName, Integer from, Integer to,
+                                                 MultipartFile file, MultipartFile replacement) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "replaced-pages";
+        int f = from == null ? 1 : from;
+        int t = to == null ? f : to;
+        try {
+            return pdfResponse(PdfTools.replacePages(file.getBytes(), replacement.getBytes(), f, t), outFileName);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Extracts embedded font programs into a ZIP. */
+    public ResponseEntity<Resource> extractFonts(MultipartFile file) {
+        try {
+            return zipResponse(PdfTools.extractFonts(file.getBytes()), "extracted-fonts");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     /** Flips pages horizontally or vertically. */
     public ResponseEntity<Resource> mirrorPdf(com.vishnu.pdf_studio_api.pdfstudioapi.enums.MirrorDirection direction,
                                               java.util.List<Integer> pages, MultipartFile file) {
