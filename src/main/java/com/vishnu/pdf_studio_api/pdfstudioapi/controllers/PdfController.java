@@ -200,6 +200,12 @@ public class PdfController {
         return pdfService.duplicatePages(req.getOutFileName(), counts, file);
     }
 
+    /** Strips document info + XMP metadata from a PDF. */
+    @PostMapping(value = "/remove-metadata", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> removeMetadata(@RequestPart("file") MultipartFile file) {
+        return pdfService.removeMetadata(file);
+    }
+
     /** Turns a PDF into a fillable form by adding real AcroForm fields. */
     @PostMapping(value = "/create-form", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> createForm(

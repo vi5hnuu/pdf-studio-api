@@ -881,6 +881,21 @@ public class PdfTools {
     }
 
     /**
+     * Strips identifying metadata from a PDF: the document information
+     * dictionary (title, author, subject, keywords, creator, producer, dates)
+     * and any XMP metadata stream.
+     */
+    public static byte[] removeMetadata(byte[] fileBytes) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(fileBytes);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            doc.setDocumentInformation(new PDDocumentInformation());
+            doc.getDocumentCatalog().setMetadata(null);
+            doc.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    /**
      * Turns a PDF into a fillable form by adding real interactive AcroForm
      * fields. Supported types: text, multiline, date (a text field), checkbox,
      * dropdown, radio (grouped by field name) and signature. Coordinates arrive
