@@ -402,6 +402,66 @@ public class PdfService {
         }
     }
 
+    /** Flips pages horizontally or vertically. */
+    public ResponseEntity<Resource> mirrorPdf(com.vishnu.pdf_studio_api.pdfstudioapi.enums.MirrorDirection direction,
+                                              java.util.List<Integer> pages, MultipartFile file) {
+        boolean horizontal = direction == null || direction == com.vishnu.pdf_studio_api.pdfstudioapi.enums.MirrorDirection.HORIZONTAL;
+        try {
+            return pdfResponse(PdfTools.mirrorPdf(file.getBytes(), horizontal, pages), "mirrored");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Resizes every page to a standard size, scaling content to fit. */
+    public ResponseEntity<Resource> resizePage(com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageSizePreset size, MultipartFile file) {
+        if (size == null) size = com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageSizePreset.A4;
+        try {
+            return pdfResponse(PdfTools.resizePageSize(file.getBytes(), size.getWidth(), size.getHeight()), "resized");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Scales page size and content uniformly by the given factor. */
+    public ResponseEntity<Resource> scalePdf(Double scale, MultipartFile file) {
+        float f = (scale == null || scale <= 0) ? 1f : scale.floatValue();
+        try {
+            return pdfResponse(PdfTools.scalePdf(file.getBytes(), f), "scaled");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Inserts one PDF into another after the given page. */
+    public ResponseEntity<Resource> insertPdf(String outFileName, Integer afterPage, MultipartFile file, MultipartFile insert) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "inserted";
+        int pos = afterPage == null ? -1 : afterPage;
+        try {
+            return pdfResponse(PdfTools.insertPdf(file.getBytes(), insert.getBytes(), pos), outFileName);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Extracts embedded/attached files from a PDF, returned as a ZIP. */
+    public ResponseEntity<Resource> extractEmbeddedFiles(MultipartFile file) {
+        try {
+            return zipResponse(PdfTools.extractEmbeddedFiles(file.getBytes()), "embedded-files");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private ResponseEntity<Resource> pdfResponse(byte[] doc, String name) {
+        ByteArrayResource baR = new ByteArrayResource(doc);
+        HttpHeaders headers = new HttpHeaders();
+        headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", name));
+        headers.setContentLength(doc.length);
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        return ResponseEntity.ok().headers(headers).body(baR);
+    }
+
     /** Extracts embedded images from a PDF and returns them as a ZIP. */
     public ResponseEntity<Resource> extractImages(MultipartFile file) {
         try {

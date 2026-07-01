@@ -212,6 +212,49 @@ public class PdfController {
         return pdfService.extractImages(file);
     }
 
+    /** Flips pages horizontally or vertically. */
+    @PostMapping(value = "/mirror-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> mirrorPdf(
+            @RequestPart(value = "mirror-pdf-info", required = false) MirrorPdfRequest req,
+            @RequestPart("file") MultipartFile file) {
+        if (req == null) req = new MirrorPdfRequest();
+        return pdfService.mirrorPdf(req.getDirection(), req.getPages(), file);
+    }
+
+    /** Resizes every page to a standard size (A4 / Letter / Legal). */
+    @PostMapping(value = "/resize-page", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> resizePage(
+            @RequestPart(value = "resize-page-info", required = false) ResizePageRequest req,
+            @RequestPart("file") MultipartFile file) {
+        if (req == null) req = new ResizePageRequest();
+        return pdfService.resizePage(req.getSize(), file);
+    }
+
+    /** Scales page size and content uniformly. */
+    @PostMapping(value = "/scale-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> scalePdf(
+            @RequestPart(value = "scale-pdf-info", required = false) ScalePdfRequest req,
+            @RequestPart("file") MultipartFile file) {
+        if (req == null) req = new ScalePdfRequest();
+        return pdfService.scalePdf(req.getScale(), file);
+    }
+
+    /** Inserts a second PDF into the first after a chosen page. */
+    @PostMapping(value = "/insert-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> insertPdf(
+            @RequestPart(value = "insert-pdf-info", required = false) InsertPdfRequest req,
+            @RequestPart("file") MultipartFile file,
+            @RequestPart("insert") MultipartFile insert) {
+        if (req == null) req = new InsertPdfRequest();
+        return pdfService.insertPdf(req.getOutFileName(), req.getAfterPage(), file, insert);
+    }
+
+    /** Extracts embedded/attached files from a PDF, returned as a ZIP. */
+    @PostMapping(value = "/extract-embedded-files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> extractEmbeddedFiles(@RequestPart("file") MultipartFile file) {
+        return pdfService.extractEmbeddedFiles(file);
+    }
+
     /** Removes JavaScript, embedded files, actions and metadata from a PDF. */
     @PostMapping(value = "/sanitize-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> sanitizePdf(@RequestPart("file") MultipartFile file) {

@@ -14,6 +14,9 @@ import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
 import org.apache.pdfbox.pdmodel.*;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
+import org.apache.pdfbox.pdmodel.common.PDNameTreeNode;
+import org.apache.pdfbox.pdmodel.common.filespecification.PDComplexFileSpecification;
+import org.apache.pdfbox.pdmodel.common.filespecification.PDEmbeddedFile;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.apache.pdfbox.pdmodel.interactive.form.PDField;
 import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
@@ -993,6 +996,161 @@ public class PdfTools {
                 }
             }
             return zipBaos.toByteArray();
+        }
+    }
+
+    /**
+     * Mirrors (flips) pages horizontally or vertically, preserving vector quality
+     * by re-drawing each page as a form under a mirror matrix. {@code pageIndices}
+     * empty = all pages; listed pages are flipped, the rest copied unchanged.
+     */
+    public static byte[] mirrorPdf(byte[] fileBytes, boolean horizontal, List<Integer> pageIndices) throws IOException {
+        try (PDDocument src = Loader.loadPDF(fileBytes);
+             PDDocument out = new PDDocument();
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            LayerUtility lu = new LayerUtility(out);
+            boolean all = (pageIndices == null || pageIndices.isEmpty());
+            int total = src.getNumberOfPages();
+            for (int i = 0; i < total; i++) {
+                PDRectangle box = src.getPage(i).getMediaBox();
+                PDFormXObject form = lu.importPageAsForm(src, i);
+                PDPage outPage = new PDPage(new PDRectangle(box.getWidth(), box.getHeight()));
+                out.addPage(outPage);
+                try (PDPageContentStream cs = new PDPageContentStream(out, outPage)) {
+                    if (all || pageIndices.contains(i)) {
+                        Matrix m = horizontal
+                                ? new Matrix(-1, 0, 0, 1, box.getWidth(), 0)
+                                : new Matrix(1, 0, 0, -1, 0, box.getHeight());
+                        cs.transform(m);
+                    }
+                    cs.drawForm(form);
+                }
+            }
+            out.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    /** Resizes every page to a standard size, scaling content to fit and centering it. */
+    public static byte[] resizePageSize(byte[] fileBytes, float targetW, float targetH) throws IOException {
+        try (PDDocument src = Loader.loadPDF(fileBytes);
+             PDDocument out = new PDDocument();
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            LayerUtility lu = new LayerUtility(out);
+            int total = src.getNumberOfPages();
+            for (int i = 0; i < total; i++) {
+                PDRectangle box = src.getPage(i).getMediaBox();
+                PDFormXObject form = lu.importPageAsForm(src, i);
+                PDPage outPage = new PDPage(new PDRectangle(targetW, targetH));
+                out.addPage(outPage);
+                float scale = Math.min(targetW / box.getWidth(), targetH / box.getHeight());
+                float tx = (targetW - box.getWidth() * scale) / 2f;
+                float ty = (targetH - box.getHeight() * scale) / 2f;
+                try (PDPageContentStream cs = new PDPageContentStream(out, outPage)) {
+                    cs.transform(new Matrix(scale, 0, 0, scale, tx, ty));
+                    cs.drawForm(form);
+                }
+            }
+            out.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    /** Scales page size and content uniformly by {@code factor}. */
+    public static byte[] scalePdf(byte[] fileBytes, float factor) throws IOException {
+        if (factor <= 0) factor = 1f;
+        try (PDDocument src = Loader.loadPDF(fileBytes);
+             PDDocument out = new PDDocument();
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            LayerUtility lu = new LayerUtility(out);
+            int total = src.getNumberOfPages();
+            for (int i = 0; i < total; i++) {
+                PDRectangle box = src.getPage(i).getMediaBox();
+                PDFormXObject form = lu.importPageAsForm(src, i);
+                PDPage outPage = new PDPage(new PDRectangle(box.getWidth() * factor, box.getHeight() * factor));
+                out.addPage(outPage);
+                try (PDPageContentStream cs = new PDPageContentStream(out, outPage)) {
+                    cs.transform(new Matrix(factor, 0, 0, factor, 0, 0));
+                    cs.drawForm(form);
+                }
+            }
+            out.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    /**
+     * Inserts {@code insertBytes} into {@code baseBytes} after the 0-indexed page
+     * {@code afterPage} (-1 = at the very start). Splices via single-page clones +
+     * merge so no source document is mutated.
+     */
+    public static byte[] insertPdf(byte[] baseBytes, byte[] insertBytes, int afterPage) throws IOException {
+        List<byte[]> basePages = pagesToBytes(baseBytes);
+        List<byte[]> insertPages = pagesToBytes(insertBytes);
+        int pos = Math.max(-1, Math.min(afterPage, basePages.size() - 1));
+
+        List<byte[]> ordered = new ArrayList<>();
+        for (int i = 0; i <= pos; i++) ordered.add(basePages.get(i));
+        ordered.addAll(insertPages);
+        for (int i = pos + 1; i < basePages.size(); i++) ordered.add(basePages.get(i));
+
+        PDFMergerUtility merger = new PDFMergerUtility();
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        merger.setDestinationStream(baos);
+        for (byte[] pb : ordered) merger.addSource(new RandomAccessReadBuffer(pb));
+        merger.mergeDocuments(null);
+        return baos.toByteArray();
+    }
+
+    // Splits a document into independent single-page PDFs (as bytes).
+    private static List<byte[]> pagesToBytes(byte[] fileBytes) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(fileBytes)) {
+            List<byte[]> result = new ArrayList<>();
+            for (PDDocument page : new Splitter().split(doc)) {
+                ByteArrayOutputStream b = new ByteArrayOutputStream();
+                page.save(b, CompressParameters.NO_COMPRESSION);
+                result.add(b.toByteArray());
+                page.close();
+            }
+            return result;
+        }
+    }
+
+    /** Extracts embedded/attached files into a ZIP; throws if the PDF has none. */
+    public static byte[] extractEmbeddedFiles(byte[] fileBytes) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(fileBytes);
+             ByteArrayOutputStream zipBaos = new ByteArrayOutputStream();
+             ZipOutputStream zip = new ZipOutputStream(zipBaos)) {
+            PDDocumentNameDictionary names = doc.getDocumentCatalog().getNames();
+            int[] count = {0};
+            if (names != null && names.getEmbeddedFiles() != null) {
+                writeEmbeddedNode(names.getEmbeddedFiles(), zip, count);
+            }
+            zip.finish();
+            if (count[0] == 0) throw new IOException("This PDF has no embedded files");
+            return zipBaos.toByteArray();
+        }
+    }
+
+    private static void writeEmbeddedNode(PDNameTreeNode<PDComplexFileSpecification> node, ZipOutputStream zip, int[] count) throws IOException {
+        Map<String, PDComplexFileSpecification> map = node.getNames();
+        if (map != null) {
+            for (Map.Entry<String, PDComplexFileSpecification> e : map.entrySet()) {
+                PDComplexFileSpecification spec = e.getValue();
+                PDEmbeddedFile ef = spec != null ? spec.getEmbeddedFile() : null;
+                if (ef == null) continue;
+                String filename = spec.getFilename();
+                if (filename == null || filename.isBlank()) filename = e.getKey();
+                count[0]++;
+                zip.putNextEntry(new ZipEntry(filename));
+                zip.write(ef.toByteArray());
+                zip.closeEntry();
+            }
+        }
+        if (node.getKids() != null) {
+            for (PDNameTreeNode<PDComplexFileSpecification> kid : node.getKids()) {
+                writeEmbeddedNode(kid, zip, count);
+            }
         }
     }
 
