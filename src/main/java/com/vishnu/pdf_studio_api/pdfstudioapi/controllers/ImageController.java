@@ -1,5 +1,6 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.controllers;
 
+import com.vishnu.pdf_studio_api.pdfstudioapi.annotation.ChargeCredits;
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.ImageService;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +20,7 @@ public class ImageController {
     private final ImageService imageService;
 
     /** Compress an image to JPEG at the specified quality (1–100). Default 75. */
+    @ChargeCredits(tool = "compress-image")
     @PostMapping(value = "/compress-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> compressImage(
             @RequestPart(value = "compress-image-info", required = false) CompressImageRequest req,
@@ -27,6 +29,7 @@ public class ImageController {
     }
 
     /** Convert any image (PNG, BMP, GIF) to JPEG at the specified quality. Default 90. */
+    @ChargeCredits(tool = "convert-to-jpg")
     @PostMapping(value = "/convert-to-jpg", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> convertToJpg(
             @RequestPart(value = "convert-to-jpg-info", required = false) ConvertToJpgRequest req,
@@ -35,6 +38,7 @@ public class ImageController {
     }
 
     /** Convert a JPEG to PNG or BMP. Default target format: PNG. */
+    @ChargeCredits(tool = "convert-from-jpg")
     @PostMapping(value = "/convert-from-jpg", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> convertFromJpg(
             @RequestPart(value = "convert-from-jpg-info", required = false) ConvertFromJpgRequest req,
@@ -51,6 +55,7 @@ public class ImageController {
     }
 
     /** Apply a visual filter (grayscale, sepia, sharpen, brightness, contrast, vintage) to an image. */
+    @ChargeCredits(tool = "filter-image")
     @PostMapping(value = "/filter-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> filterImage(
             @RequestPart(value = "filter-image-info", required = false) FilterImageRequest req,
