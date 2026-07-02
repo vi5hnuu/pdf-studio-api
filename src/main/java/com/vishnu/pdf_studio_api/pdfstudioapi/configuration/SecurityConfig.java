@@ -12,6 +12,8 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.jwt.*;
+
+import java.util.List;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
@@ -41,6 +43,9 @@ public class SecurityConfig {
     @Value("${app.auth.expected-issuer}")
     private String expectedIssuer;
 
+    @Value("${app.auth.expected-audience}")
+    private String expectedAudience;
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         return http
@@ -59,10 +64,16 @@ public class SecurityConfig {
     @Bean
     public JwtDecoder jwtDecoder() {
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
-        OAuth2TokenValidator<Jwt> withIssuer = new DelegatingOAuth2TokenValidator<>(
+        // Reject a token unless its aud claim contains THIS product's id — so a token
+        // minted for another product (or with no audience) can't be replayed here.
+        OAuth2TokenValidator<Jwt> audienceValidator = new JwtClaimValidator<List<String>>(
+                JwtClaimNames.AUD,
+                aud -> aud != null && aud.contains(expectedAudience));
+        OAuth2TokenValidator<Jwt> validators = new DelegatingOAuth2TokenValidator<>(
                 new JwtTimestampValidator(),
-                new JwtIssuerValidator(expectedIssuer));
-        decoder.setJwtValidator(withIssuer);
+                new JwtIssuerValidator(expectedIssuer),
+                audienceValidator);
+        decoder.setJwtValidator(validators);
         return decoder;
     }
 
