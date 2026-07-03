@@ -3,6 +3,7 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.configuration;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -30,12 +31,14 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableMethodSecurity
 public class SecurityConfig {
 
-    /** Public paths — docs, health, and the machine-to-machine Play RTDN webhook (secret-guarded). */
+    /** Public paths — docs and health. (The RTDN webhook has its own chain below.) */
     private static final String[] PUBLIC_PATHS = {
             "/api-docs/**", "/swagger-ui/**", "/swagger-ui.html",
             "/actuator/health",
-            "/api/v1/credits/play-rtdn",
     };
+
+    /** Path of the machine-to-machine Play RTDN webhook. */
+    private static final String RTDN_PATH = "/api/v1/credits/play-rtdn";
 
     @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri}")
     private String jwkSetUri;
@@ -46,7 +49,27 @@ public class SecurityConfig {
     @Value("${app.auth.expected-audience}")
     private String expectedAudience;
 
+    /**
+     * Dedicated chain for the RTDN webhook. It deliberately does NOT enable the OAuth2
+     * resource server, so the Pub/Sub OIDC token in the {@code Authorization} header is
+     * left untouched (it is Google-signed, not from our auth JWKS, and would otherwise be
+     * rejected with 401 before reaching the controller). The controller authenticates it
+     * itself (OIDC verification + shared secret).
+     */
     @Bean
+    @Order(1)
+    public SecurityFilterChain webhookFilterChain(HttpSecurity http) throws Exception {
+        return http
+                .securityMatcher(RTDN_PATH)
+                .cors(Customizer.withDefaults())
+                .csrf(AbstractHttpConfigurer::disable)
+                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+                .build();
+    }
+
+    @Bean
+    @Order(2)
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         return http
                 .cors(Customizer.withDefaults())
