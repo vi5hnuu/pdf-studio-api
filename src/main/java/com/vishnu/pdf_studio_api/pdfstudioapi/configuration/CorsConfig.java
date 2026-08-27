@@ -24,7 +24,8 @@ public class CorsConfig implements WebMvcConfigurer {
         if (Arrays.asList(environment.getActiveProfiles()).contains("prod")) {
             allowedOrigins = new String[]{
                     "https://pdf-studio.laxmi.solutions",
-                    "https://pdf-studio-vi.onrender.com"
+                    "https://pdf-studio-vi.onrender.com",
+                    "http://pdf-craft.laxmi.solutions:8082"
             };
         } else {
             allowedOrigins = new String[]{
