@@ -4,6 +4,8 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.RedactPdfRequest.Redac
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
+import com.vishnu.pdf_studio_api.pdfstudioapi.util.DownloadResponse;
+import com.vishnu.pdf_studio_api.pdfstudioapi.util.FileNames;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.OfficeConvertTools;
 import lombok.extern.slf4j.Slf4j;
@@ -41,7 +43,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 
@@ -63,7 +65,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 
@@ -88,7 +90,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.%s", outFileName,type.equals(SplitType.DELETE_PAGES) ? "pdf" : "zip"));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", type.equals(SplitType.DELETE_PAGES) ? "pdf" : "zip"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 
@@ -111,7 +113,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 
@@ -137,7 +139,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 
@@ -158,7 +160,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(textBytes);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.txt", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "txt"));
             headers.setContentLength(textBytes.length);
             headers.setContentType(MediaType.TEXT_PLAIN);
 
@@ -176,7 +178,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 
@@ -192,7 +194,7 @@ public class PdfService {
             final byte[] doc = PdfTools.cropPdf(document, marginTop, marginBottom, marginLeft, marginRight);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.status(200).headers(headers).body(baR);
@@ -215,7 +217,7 @@ public class PdfService {
             final byte[] doc = PdfTools.editMetadata(document, title, author, subject, keywords, creator, producer);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.status(200).headers(headers).body(baR);
@@ -231,7 +233,7 @@ public class PdfService {
             final byte[] doc = PdfTools.addHeaderFooter(document, headerText, footerText, fontSize, color, fontName, fromPage, toPage, topPadding, bottomPadding);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.status(200).headers(headers).body(baR);
@@ -246,7 +248,7 @@ public class PdfService {
             final byte[] doc = PdfTools.repairPdf(file.getBytes());
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.status(200).headers(headers).body(baR);
@@ -261,7 +263,7 @@ public class PdfService {
             final byte[] doc = PdfTools.flattenPdf(document);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.status(200).headers(headers).body(baR);
@@ -276,7 +278,7 @@ public class PdfService {
             final byte[] doc = PdfTools.addBlankPages(document, positions, pageWidth, pageHeight);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.status(200).headers(headers).body(baR);
@@ -291,7 +293,7 @@ public class PdfService {
             final byte[] doc = PdfTools.stampPdf(sourceFile.getBytes(), stampFile.getBytes(), opacity, fromPage, toPage);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.status(200).headers(headers).body(baR);
@@ -314,7 +316,7 @@ public class PdfService {
                     page, xFrac, yFrac, widthFrac, heightFrac);
             ByteArrayResource baR = new ByteArrayResource(result);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(result.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.status(200).headers(headers).body(baR);
@@ -329,7 +331,7 @@ public class PdfService {
             byte[] result = OfficeConvertTools.pdfToDocx(file.getBytes());
             ByteArrayResource baR = new ByteArrayResource(result);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + outFileName + ".docx");
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "docx"));
             headers.setContentLength(result.length);
             headers.setContentType(MediaType.parseMediaType(
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"));
@@ -345,7 +347,7 @@ public class PdfService {
             byte[] result = OfficeConvertTools.pdfToPptx(file.getBytes());
             ByteArrayResource baR = new ByteArrayResource(result);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + outFileName + ".pptx");
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pptx"));
             headers.setContentLength(result.length);
             headers.setContentType(MediaType.parseMediaType(
                     "application/vnd.openxmlformats-officedocument.presentationml.presentation"));
@@ -361,7 +363,7 @@ public class PdfService {
             byte[] result = OfficeConvertTools.pdfToXlsx(file.getBytes());
             ByteArrayResource baR = new ByteArrayResource(result);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + outFileName + ".xlsx");
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "xlsx"));
             headers.setContentLength(result.length);
             headers.setContentType(MediaType.parseMediaType(
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
@@ -377,7 +379,7 @@ public class PdfService {
             byte[] doc = PdfTools.redactPdf(file.getBytes(), regions);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.ok().headers(headers).body(baR);
@@ -393,7 +395,7 @@ public class PdfService {
             byte[] doc = PdfTools.duplicatePages(file.getBytes(), pageCounts);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.ok().headers(headers).body(baR);
@@ -487,7 +489,7 @@ public class PdfService {
     private ResponseEntity<Resource> pdfResponse(byte[] doc, String name) {
         ByteArrayResource baR = new ByteArrayResource(doc);
         HttpHeaders headers = new HttpHeaders();
-        headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", name));
+        headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(name, "document", "pdf"));
         headers.setContentLength(doc.length);
         headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
         return ResponseEntity.ok().headers(headers).body(baR);
@@ -509,7 +511,7 @@ public class PdfService {
             byte[] doc = PdfTools.sanitizePdf(file.getBytes());
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=sanitized.pdf");
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(null, "sanitized", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.ok().headers(headers).body(baR);
@@ -533,7 +535,7 @@ public class PdfService {
     private ResponseEntity<Resource> zipResponse(byte[] zip, String name) {
         ByteArrayResource baR = new ByteArrayResource(zip);
         HttpHeaders headers = new HttpHeaders();
-        headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.zip", name));
+        headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(name, "document", "zip"));
         headers.setContentLength(zip.length);
         headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
         return ResponseEntity.ok().headers(headers).body(baR);
@@ -564,7 +566,7 @@ public class PdfService {
             byte[] doc = PdfTools.removeMetadata(file.getBytes());
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=metadata-removed.pdf");
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(null, "metadata-removed", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.ok().headers(headers).body(baR);
@@ -582,7 +584,7 @@ public class PdfService {
             byte[] doc = PdfTools.createForm(file.getBytes(), fields);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.ok().headers(headers).body(baR);
@@ -606,7 +608,7 @@ public class PdfService {
             byte[] result = PdfTools.editBookmarks(doc, bookmarksJson);
             ByteArrayResource baR = new ByteArrayResource(result);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(result.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.ok().headers(headers).body(baR);
@@ -621,7 +623,7 @@ public class PdfService {
             byte[] doc = PdfTools.removeBlankPages(file.getBytes(), threshold);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.ok().headers(headers).body(baR);
@@ -636,7 +638,7 @@ public class PdfService {
             byte[] doc = PdfTools.optimizePdf(file.getBytes());
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.ok().headers(headers).body(baR);
@@ -651,7 +653,7 @@ public class PdfService {
             byte[] doc = PdfTools.nUpPdf(file.getBytes(), nUp);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.ok().headers(headers).body(baR);
@@ -693,7 +695,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(imageBytes);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, single ? String.format("attachment; filename=%s.jpg", outFileName) : String.format("attachment; filename=%s.zip", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", single ? "jpg" : "zip"));
             headers.setContentLength(imageBytes.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 
@@ -716,7 +718,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 
@@ -731,7 +733,7 @@ public class PdfService {
     }
 
     public ResponseEntity<Resource> pageNumbers(MultipartFile file, String outFileName, Postion vPos, Postion hPos, Integer fromPage, Integer toPage, PageNoType pageNoType, ColorModel fillColor, Padding padding, Integer size, Standard14Fonts.FontName fontName) {
-        if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = file.getName();
+        outFileName = FileNames.safeBaseName(outFileName, FileNames.stripExtension(file.getOriginalFilename()));
 
         try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
             if (toPage == null) toPage = document.getNumberOfPages() - 1;
@@ -742,7 +744,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 
@@ -765,7 +767,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(rotatedPdf);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(baR.contentLength());
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 
@@ -780,7 +782,7 @@ public class PdfService {
     }
 
     public ResponseEntity<Resource> unlockPdf(String outFileName,String password,MultipartFile file) throws InvalidPasswordException {
-        if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = file.getName();
+        outFileName = FileNames.safeBaseName(outFileName, FileNames.stripExtension(file.getOriginalFilename()));
         try (final PDDocument document = Loader.loadPDF(file.getBytes(),password)) {
             if(!document.isEncrypted()) throw new Exception("pdf is already un-protected");
 
@@ -789,7 +791,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(protectedDocBytes);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(protectedDocBytes.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 
@@ -805,7 +807,7 @@ public class PdfService {
     }
 
     public ResponseEntity<Resource> protectPdf(String outFileName, String ownerPassword, String userPassword, Set<UserAccessPermission> userAccessPermissions, MultipartFile file) {
-        if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = file.getName();
+        outFileName = FileNames.safeBaseName(outFileName, FileNames.stripExtension(file.getOriginalFilename()));
 
         try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
             final byte[] protectedDocBytes = PdfTools.protectPdf(document, ownerPassword, userPassword, userAccessPermissions);
@@ -813,7 +815,7 @@ public class PdfService {
             ByteArrayResource baR = new ByteArrayResource(protectedDocBytes);
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment; filename=%s.pdf", outFileName));
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
             headers.setContentLength(protectedDocBytes.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
 

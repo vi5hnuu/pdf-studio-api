@@ -9,6 +9,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import com.vishnu.pdf_studio_api.pdfstudioapi.util.DownloadResponse;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.*;
@@ -40,7 +41,7 @@ public class ImageService {
         try {
             BufferedImage img = readImage(file);
             byte[] bytes = encodeJpeg(toRgb(img), quality);
-            return fileResponse(bytes, outFileName + ".jpg", "image/jpeg");
+            return fileResponse(bytes, outFileName, "jpg", "image/jpeg");
         } catch (Exception e) {
             throw new RuntimeException("Failed to compress image: " + e.getMessage(), e);
         }
@@ -59,7 +60,7 @@ public class ImageService {
         try {
             BufferedImage img = readImage(file);
             byte[] bytes = encodeJpeg(toRgb(img), quality);
-            return fileResponse(bytes, outFileName + ".jpg", "image/jpeg");
+            return fileResponse(bytes, outFileName, "jpg", "image/jpeg");
         } catch (Exception e) {
             throw new RuntimeException("Failed to convert image to JPG: " + e.getMessage(), e);
         }
@@ -81,7 +82,7 @@ public class ImageService {
             BufferedImage out = fmt.equals("PNG") ? img : toRgb(img);
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             ImageIO.write(out, fmt, baos);
-            return fileResponse(baos.toByteArray(), outFileName + "." + ext, "image/" + ext);
+            return fileResponse(baos.toByteArray(), outFileName, ext, "image/" + ext);
         } catch (Exception e) {
             throw new RuntimeException("Failed to convert image from JPG: " + e.getMessage(), e);
         }
@@ -135,11 +136,11 @@ public class ImageService {
 
             if (isJpeg) {
                 byte[] bytes = encodeJpeg(toRgb(resized), 92);
-                return fileResponse(bytes, outFileName + ".jpg", "image/jpeg");
+                return fileResponse(bytes, outFileName, "jpg", "image/jpeg");
             } else {
                 ByteArrayOutputStream baos = new ByteArrayOutputStream();
                 ImageIO.write(resized, "PNG", baos);
-                return fileResponse(baos.toByteArray(), outFileName + ".png", "image/png");
+                return fileResponse(baos.toByteArray(), outFileName, "png", "image/png");
             }
         } catch (Exception e) {
             throw new RuntimeException("Failed to resize image: " + e.getMessage(), e);
@@ -162,7 +163,7 @@ public class ImageService {
             BufferedImage src = readImage(file);
             BufferedImage result = applyFilterToImage(src, type, intensity);
             byte[] bytes = encodeJpeg(toRgb(result), 90);
-            return fileResponse(bytes, outFileName + ".jpg", "image/jpeg");
+            return fileResponse(bytes, outFileName, "jpg", "image/jpeg");
         } catch (Exception e) {
             throw new RuntimeException("Failed to apply filter: " + e.getMessage(), e);
         }
@@ -347,11 +348,11 @@ public class ImageService {
         String outFileName = defaultName(outName, stripExtension(name) + suffix);
         if (isJpeg) {
             byte[] bytes = encodeJpeg(toRgb(img), 92);
-            return fileResponse(bytes, outFileName + ".jpg", "image/jpeg");
+            return fileResponse(bytes, outFileName, "jpg", "image/jpeg");
         }
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ImageIO.write(img, "PNG", baos);
-        return fileResponse(baos.toByteArray(), outFileName + ".png", "image/png");
+        return fileResponse(baos.toByteArray(), outFileName, "png", "image/png");
     }
 
     private BufferedImage readImage(MultipartFile file) throws IOException {
@@ -391,13 +392,15 @@ public class ImageService {
         return baos.toByteArray();
     }
 
-    private ResponseEntity<Resource> fileResponse(byte[] bytes, String filename, String mimeType) {
-        ByteArrayResource body = new ByteArrayResource(bytes);
-        HttpHeaders headers = new HttpHeaders();
-        headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + filename);
-        headers.setContentLength(bytes.length);
-        headers.setContentType(MediaType.parseMediaType(mimeType));
-        return ResponseEntity.ok().headers(headers).body(body);
+    /**
+     * Builds the download response. The filename is sanitised and RFC 5987-encoded by
+     * {@link DownloadResponse} rather than concatenated into the header, so a client-supplied
+     * out-file name can no longer break or split it.
+     */
+    private ResponseEntity<Resource> fileResponse(byte[] bytes, String baseName, String extension,
+                                                  String mimeType) {
+        return DownloadResponse.of(bytes, baseName, "image", extension,
+                MediaType.parseMediaType(mimeType));
     }
 
     private String defaultName(String provided, String fallback) {

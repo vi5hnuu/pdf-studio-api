@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -28,6 +29,7 @@ import java.util.Collection;
  */
 @Aspect
 @Component
+@Order(1) // after ValidateUploadAspect — never charge for an upload we reject
 @RequiredArgsConstructor
 public class ChargeCreditsAspect {
 

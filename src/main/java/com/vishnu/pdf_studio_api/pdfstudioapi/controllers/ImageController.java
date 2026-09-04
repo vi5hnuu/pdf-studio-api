@@ -1,6 +1,7 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.controllers;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.annotation.ChargeCredits;
+import com.vishnu.pdf_studio_api.pdfstudioapi.annotation.ValidateUpload;
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.ImageService;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +22,7 @@ public class ImageController {
 
     /** Compress an image to JPEG at the specified quality (1–100). Default 75. */
     @ChargeCredits(tool = "compress-image")
+    @ValidateUpload(ValidateUpload.Kind.IMAGE)
     @PostMapping(value = "/compress-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> compressImage(
             @RequestPart(value = "compress-image-info", required = false) CompressImageRequest req,
@@ -30,6 +32,7 @@ public class ImageController {
 
     /** Convert any image (PNG, BMP, GIF) to JPEG at the specified quality. Default 90. */
     @ChargeCredits(tool = "convert-to-jpg")
+    @ValidateUpload(ValidateUpload.Kind.IMAGE)
     @PostMapping(value = "/convert-to-jpg", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> convertToJpg(
             @RequestPart(value = "convert-to-jpg-info", required = false) ConvertToJpgRequest req,
@@ -39,6 +42,7 @@ public class ImageController {
 
     /** Convert a JPEG to PNG or BMP. Default target format: PNG. */
     @ChargeCredits(tool = "convert-from-jpg")
+    @ValidateUpload(ValidateUpload.Kind.IMAGE)
     @PostMapping(value = "/convert-from-jpg", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> convertFromJpg(
             @RequestPart(value = "convert-from-jpg-info", required = false) ConvertFromJpgRequest req,
@@ -47,6 +51,7 @@ public class ImageController {
     }
 
     /** Resize an image to the specified width × height using bicubic interpolation. */
+    @ValidateUpload(ValidateUpload.Kind.IMAGE)
     @PostMapping(value = "/resize-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> resizeImage(
             @RequestPart(value = "resize-image-info", required = false) ResizeImageRequest req,
@@ -56,6 +61,7 @@ public class ImageController {
 
     /** Apply a visual filter (grayscale, sepia, sharpen, brightness, contrast, vintage) to an image. */
     @ChargeCredits(tool = "filter-image")
+    @ValidateUpload(ValidateUpload.Kind.IMAGE)
     @PostMapping(value = "/filter-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> filterImage(
             @RequestPart(value = "filter-image-info", required = false) FilterImageRequest req,
@@ -64,6 +70,7 @@ public class ImageController {
     }
 
     /** Rotate an image by 0 / 90 / 180 / 270 degrees. */
+    @ValidateUpload(ValidateUpload.Kind.IMAGE)
     @PostMapping(value = "/rotate-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> rotateImage(
             @RequestPart(value = "rotate-image-info", required = false) RotateImageRequest req,
@@ -72,6 +79,7 @@ public class ImageController {
     }
 
     /** Flip an image horizontally or vertically. */
+    @ValidateUpload(ValidateUpload.Kind.IMAGE)
     @PostMapping(value = "/flip-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> flipImage(
             @RequestPart(value = "flip-image-info", required = false) FlipImageRequest req,
@@ -80,6 +88,7 @@ public class ImageController {
     }
 
     /** Add a solid coloured border around an image. */
+    @ValidateUpload(ValidateUpload.Kind.IMAGE)
     @PostMapping(value = "/border-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> borderImage(
             @RequestPart(value = "border-image-info", required = false) BorderImageRequest req,
