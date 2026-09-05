@@ -19,11 +19,13 @@ import org.springframework.stereotype.Component;
 public class PdfMemoryConfigurer {
 
     private final LoadProperties loadProperties;
+    private final UploadProperties uploadProperties;
 
     @PostConstruct
     void apply() {
         PdfDocuments.setDefaultThreshold(loadProperties.getScratchFileThresholdBytes());
-        log.info("PDFBox spills to a temp-file stream cache at {} bytes and above",
-                PdfDocuments.defaultThreshold());
+        PdfDocuments.setMaxPages(uploadProperties.getMaxPages());
+        log.info("PDFBox spills to a temp-file stream cache at {} bytes and above; page cap {}",
+                PdfDocuments.defaultThreshold(), PdfDocuments.maxPages());
     }
 }

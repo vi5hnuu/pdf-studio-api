@@ -10,7 +10,6 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.util.FileNames;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.OpenPdf;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfDocuments;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.TempFiles;
-import com.vishnu.pdf_studio_api.pdfstudioapi.validation.UploadValidator;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.OfficeConvertTools;
 import lombok.RequiredArgsConstructor;
@@ -44,7 +43,6 @@ import java.util.zip.ZipOutputStream;
 public class PdfService {
 
     private final LoadProperties loadProperties;
-    private final UploadValidator uploadValidator;
 
     /**
      * Opens an upload as a temp-file-backed document.
@@ -54,7 +52,6 @@ public class PdfService {
      * multipart to disk, so this removes a copy rather than adding I/O, and lets PDFBox spill its
      * own working data for large documents.
      *
-     * <p>Also the single place the page-count cap is enforced — it cannot be known before parsing.
      */
     private OpenPdf openPdf(MultipartFile file) throws IOException {
         return openPdf(file, null);
@@ -63,14 +60,10 @@ public class PdfService {
     private OpenPdf openPdf(MultipartFile file, String password) throws IOException {
         TempFiles.Handle handle = TempFiles.of(file, ".pdf");
         try {
+            // PdfDocuments.load applies the page cap for every tool, including those that load
+            // inside PdfTools — so it is not repeated here.
             PDDocument document = PdfDocuments.load(
                     handle.path(), loadProperties.getScratchFileThresholdBytes(), password);
-            try {
-                uploadValidator.pageCount(document.getNumberOfPages());
-            } catch (RuntimeException tooManyPages) {
-                document.close();
-                throw tooManyPages;
-            }
             return new OpenPdf(handle, document);
         } catch (IOException | RuntimeException e) {
             handle.close();
@@ -102,8 +95,8 @@ public class PdfService {
     public ResponseEntity<Resource> reorderPdf(String outFileName, int[] order, MultipartFile file) {
         if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "reorder-pdf";
 
-        try {
-            final byte[] doc = PdfTools.reorderPdf(file, order);
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            final byte[] doc = PdfTools.reorderPdf(upload.path(), order);
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
@@ -151,8 +144,8 @@ public class PdfService {
         if (outFileName == null || outFileName.isBlank()) outFileName = "compressed-pdf";
         if (level == null) level = CompressionLevel.RECOMMENDED;
 
-        try {
-            final byte[] doc = PdfTools.compressPdf(file.getBytes(), level);
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            final byte[] doc = PdfTools.compressPdf(upload.path(), level);
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
@@ -218,8 +211,8 @@ public class PdfService {
     public ResponseEntity<Resource> grayscalePdf(String outFileName, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "grayscale-pdf";
 
-        try {
-            final byte[] doc = PdfTools.grayscalePdf(file.getBytes());
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            final byte[] doc = PdfTools.grayscalePdf(upload.path());
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
@@ -293,8 +286,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> repairPdf(String outFileName, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "repaired-pdf";
-        try {
-            final byte[] doc = PdfTools.repairPdf(file.getBytes());
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            final byte[] doc = PdfTools.repairPdf(upload.path());
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
@@ -340,8 +333,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> stampPdf(String outFileName, Float opacity, Integer fromPage, Integer toPage, MultipartFile sourceFile, MultipartFile stampFile) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "stamped-pdf";
-        try {
-            final byte[] doc = PdfTools.stampPdf(sourceFile.getBytes(), stampFile.getBytes(), opacity, fromPage, toPage);
+        try (TempFiles.Handle source = TempFiles.of(sourceFile, ".pdf"); TempFiles.Handle stamp = TempFiles.of(stampFile, ".pdf")) {
+            final byte[] doc = PdfTools.stampPdf(source.path(), stamp.path(), opacity, fromPage, toPage);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
@@ -362,8 +355,8 @@ public class PdfService {
                                                float widthFrac, float heightFrac,
                                                MultipartFile pdfFile, MultipartFile imageFile) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "image-placed";
-        try {
-            byte[] result = PdfTools.placeImage(pdfFile.getBytes(), imageFile.getBytes(),
+        try (TempFiles.Handle upload = TempFiles.of(pdfFile, ".pdf")) {
+            byte[] result = PdfTools.placeImage(upload.path(), imageFile.getBytes(),
                     page, xFrac, yFrac, widthFrac, heightFrac);
             ByteArrayResource baR = new ByteArrayResource(result);
             HttpHeaders headers = new HttpHeaders();
@@ -378,8 +371,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> pdfToWord(String outFileName, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "converted";
-        try {
-            byte[] result = OfficeConvertTools.pdfToDocx(file.getBytes());
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] result = OfficeConvertTools.pdfToDocx(upload.path());
             ByteArrayResource baR = new ByteArrayResource(result);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "docx"));
@@ -394,8 +387,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> pdfToPowerPoint(String outFileName, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "converted";
-        try {
-            byte[] result = OfficeConvertTools.pdfToPptx(file.getBytes());
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] result = OfficeConvertTools.pdfToPptx(upload.path());
             ByteArrayResource baR = new ByteArrayResource(result);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pptx"));
@@ -410,8 +403,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> pdfToExcel(String outFileName, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "converted";
-        try {
-            byte[] result = OfficeConvertTools.pdfToXlsx(file.getBytes());
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] result = OfficeConvertTools.pdfToXlsx(upload.path());
             ByteArrayResource baR = new ByteArrayResource(result);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "xlsx"));
@@ -426,8 +419,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> redactPdf(String outFileName, List<RedactRegion> regions, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "redacted-pdf";
-        try {
-            byte[] doc = PdfTools.redactPdf(file.getBytes(), regions);
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] doc = PdfTools.redactPdf(upload.path(), regions);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
@@ -442,8 +435,8 @@ public class PdfService {
     public ResponseEntity<Resource> duplicatePages(String outFileName, java.util.Map<Integer, Integer> pageCounts, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "duplicated-pdf";
         if (pageCounts == null) pageCounts = java.util.Collections.emptyMap();
-        try {
-            byte[] doc = PdfTools.duplicatePages(file.getBytes(), pageCounts);
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] doc = PdfTools.duplicatePages(upload.path(), pageCounts);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
@@ -457,8 +450,8 @@ public class PdfService {
 
     /** Returns a JSON analysis report (page/word counts, blank/duplicate/landscape pages, etc.). */
     public ResponseEntity<?> analyzePdf(MultipartFile file) {
-        try {
-            return ResponseEntity.ok(PdfTools.analyzePdf(file.getBytes()));
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            return ResponseEntity.ok(PdfTools.analyzePdf(upload.path()));
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -470,8 +463,8 @@ public class PdfService {
         if (outFileName == null || outFileName.isBlank()) outFileName = "replaced-pages";
         int f = from == null ? 1 : from;
         int t = to == null ? f : to;
-        try {
-            return pdfResponse(PdfTools.replacePages(file.getBytes(), replacement.getBytes(), f, t), outFileName);
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf"); TempFiles.Handle replUpload = TempFiles.of(replacement, ".pdf")) {
+            return pdfResponse(PdfTools.replacePages(upload.path(), replUpload.path(), f, t), outFileName);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -479,8 +472,8 @@ public class PdfService {
 
     /** Extracts embedded font programs into a ZIP. */
     public ResponseEntity<Resource> extractFonts(MultipartFile file) {
-        try {
-            return zipResponse(PdfTools.extractFonts(file.getBytes()), "extracted-fonts");
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            return zipResponse(PdfTools.extractFonts(upload.path()), "extracted-fonts");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -490,8 +483,8 @@ public class PdfService {
     public ResponseEntity<Resource> mirrorPdf(com.vishnu.pdf_studio_api.pdfstudioapi.enums.MirrorDirection direction,
                                               java.util.List<Integer> pages, MultipartFile file) {
         boolean horizontal = direction == null || direction == com.vishnu.pdf_studio_api.pdfstudioapi.enums.MirrorDirection.HORIZONTAL;
-        try {
-            return pdfResponse(PdfTools.mirrorPdf(file.getBytes(), horizontal, pages), "mirrored");
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            return pdfResponse(PdfTools.mirrorPdf(upload.path(), horizontal, pages), "mirrored");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -500,8 +493,8 @@ public class PdfService {
     /** Resizes every page to a standard size, scaling content to fit. */
     public ResponseEntity<Resource> resizePage(com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageSizePreset size, MultipartFile file) {
         if (size == null) size = com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageSizePreset.A4;
-        try {
-            return pdfResponse(PdfTools.resizePageSize(file.getBytes(), size.getWidth(), size.getHeight()), "resized");
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            return pdfResponse(PdfTools.resizePageSize(upload.path(), size.getWidth(), size.getHeight()), "resized");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -510,8 +503,8 @@ public class PdfService {
     /** Scales page size and content uniformly by the given factor. */
     public ResponseEntity<Resource> scalePdf(Double scale, MultipartFile file) {
         float f = (scale == null || scale <= 0) ? 1f : scale.floatValue();
-        try {
-            return pdfResponse(PdfTools.scalePdf(file.getBytes(), f), "scaled");
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            return pdfResponse(PdfTools.scalePdf(upload.path(), f), "scaled");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -521,8 +514,8 @@ public class PdfService {
     public ResponseEntity<Resource> insertPdf(String outFileName, Integer afterPage, MultipartFile file, MultipartFile insert) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "inserted";
         int pos = afterPage == null ? -1 : afterPage;
-        try {
-            return pdfResponse(PdfTools.insertPdf(file.getBytes(), insert.getBytes(), pos), outFileName);
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf"); TempFiles.Handle insertUpload = TempFiles.of(insert, ".pdf")) {
+            return pdfResponse(PdfTools.insertPdf(upload.path(), insertUpload.path(), pos), outFileName);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -530,8 +523,8 @@ public class PdfService {
 
     /** Extracts embedded/attached files from a PDF, returned as a ZIP. */
     public ResponseEntity<Resource> extractEmbeddedFiles(MultipartFile file) {
-        try {
-            return zipResponse(PdfTools.extractEmbeddedFiles(file.getBytes()), "embedded-files");
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            return zipResponse(PdfTools.extractEmbeddedFiles(upload.path()), "embedded-files");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -548,8 +541,8 @@ public class PdfService {
 
     /** Extracts embedded images from a PDF and returns them as a ZIP. */
     public ResponseEntity<Resource> extractImages(MultipartFile file) {
-        try {
-            byte[] zip = PdfTools.extractImages(file.getBytes());
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] zip = PdfTools.extractImages(upload.path());
             return zipResponse(zip, "extracted-images");
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -558,8 +551,8 @@ public class PdfService {
 
     /** Removes JavaScript, embedded files, actions and metadata from a PDF. */
     public ResponseEntity<Resource> sanitizePdf(MultipartFile file) {
-        try {
-            byte[] doc = PdfTools.sanitizePdf(file.getBytes());
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] doc = PdfTools.sanitizePdf(upload.path());
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(null, "sanitized", "pdf"));
@@ -575,8 +568,8 @@ public class PdfService {
     public ResponseEntity<Resource> splitBySize(String outFileName, Double maxSizeMb, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "split-by-size";
         double mb = (maxSizeMb == null || maxSizeMb <= 0) ? 5.0 : maxSizeMb;
-        try {
-            byte[] zip = PdfTools.splitBySize(file.getBytes(), (long) (mb * 1024 * 1024));
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] zip = PdfTools.splitBySize(upload.path(), (long) (mb * 1024 * 1024));
             return zipResponse(zip, outFileName);
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -605,8 +598,8 @@ public class PdfService {
     /** Fills the supplied field values, then flattens the form. */
     public ResponseEntity<Resource> fillFlatten(String outFileName, java.util.Map<String, String> values, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "filled-flattened";
-        try {
-            return pdfResponse(PdfTools.fillFlatten(file.getBytes(), values), outFileName);
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            return pdfResponse(PdfTools.fillFlatten(upload.path(), values), outFileName);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -614,8 +607,8 @@ public class PdfService {
 
     /** Strips document info + XMP metadata from a PDF. */
     public ResponseEntity<Resource> removeMetadata(MultipartFile file) {
-        try {
-            byte[] doc = PdfTools.removeMetadata(file.getBytes());
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] doc = PdfTools.removeMetadata(upload.path());
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(null, "metadata-removed", "pdf"));
@@ -632,8 +625,8 @@ public class PdfService {
                                                java.util.List<com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.CreateFormRequest.FormFieldSpec> fields,
                                                MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "fillable-form";
-        try {
-            byte[] doc = PdfTools.createForm(file.getBytes(), fields);
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] doc = PdfTools.createForm(upload.path(), fields);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
@@ -673,8 +666,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> removeBlankPages(String outFileName, float threshold, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "no-blank-pages";
-        try {
-            byte[] doc = PdfTools.removeBlankPages(file.getBytes(), threshold);
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] doc = PdfTools.removeBlankPages(upload.path(), threshold);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
@@ -688,8 +681,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> optimizePdf(String outFileName, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "optimized";
-        try {
-            byte[] doc = PdfTools.optimizePdf(file.getBytes());
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] doc = PdfTools.optimizePdf(upload.path());
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
@@ -703,8 +696,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> nUpPdf(String outFileName, int nUp, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = nUp + "-up";
-        try {
-            byte[] doc = PdfTools.nUpPdf(file.getBytes(), nUp);
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            byte[] doc = PdfTools.nUpPdf(upload.path(), nUp);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));

@@ -1,5 +1,6 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.utils;
 
+import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfDocuments;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -15,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.awt.geom.Rectangle2D;
 import java.io.ByteArrayOutputStream;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -31,8 +33,8 @@ public class OfficeConvertTools {
      * Extracts text from each PDF page and writes it as paragraphs in a DOCX document.
      * Page breaks are inserted between pages.
      */
-    public static byte[] pdfToDocx(byte[] pdfBytes) throws Exception {
-        try (PDDocument doc = Loader.loadPDF(pdfBytes);
+    public static byte[] pdfToDocx(Path pdfPath) throws Exception {
+        try (PDDocument doc = PdfDocuments.load(pdfPath);
              XWPFDocument docx = new XWPFDocument();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
@@ -73,8 +75,8 @@ public class OfficeConvertTools {
      * Each line of text becomes a row; tab-separated or multi-space separated tokens
      * are split into individual cells (best-effort table detection).
      */
-    public static byte[] pdfToXlsx(byte[] pdfBytes) throws Exception {
-        try (PDDocument doc = Loader.loadPDF(pdfBytes);
+    public static byte[] pdfToXlsx(Path pdfPath) throws Exception {
+        try (PDDocument doc = PdfDocuments.load(pdfPath);
              XSSFWorkbook wb = new XSSFWorkbook();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
@@ -115,8 +117,8 @@ public class OfficeConvertTools {
      * Creates one PowerPoint slide per PDF page with the extracted text in a text box.
      * Slide dimensions match A4 landscape (common presentation size).
      */
-    public static byte[] pdfToPptx(byte[] pdfBytes) throws Exception {
-        try (PDDocument doc = Loader.loadPDF(pdfBytes);
+    public static byte[] pdfToPptx(Path pdfPath) throws Exception {
+        try (PDDocument doc = PdfDocuments.load(pdfPath);
              XMLSlideShow pptx = new XMLSlideShow();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 

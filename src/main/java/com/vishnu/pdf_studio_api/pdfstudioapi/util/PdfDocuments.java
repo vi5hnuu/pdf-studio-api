@@ -1,5 +1,6 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.util;
 
+import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.io.IOUtils;
 import org.apache.pdfbox.io.RandomAccessReadBufferedFile;
@@ -31,6 +32,14 @@ public final class PdfDocuments {
      */
     private static volatile long defaultThresholdBytes = 8L * 1024 * 1024;
 
+    /**
+     * Hard ceiling on pages, enforced here because <em>every</em> PDF load in the service passes
+     * through this class. Enforcing it at the individual tools instead left the heaviest ones
+     * (compress, grayscale, the Office conversions) uncapped, since they load inside {@code PdfTools}
+     * rather than through the service's open helper.
+     */
+    private static volatile int maxPages = 2000;
+
     private PdfDocuments() {}
 
     public static long defaultThreshold() {
@@ -39,6 +48,14 @@ public final class PdfDocuments {
 
     public static void setDefaultThreshold(long bytes) {
         if (bytes > 0) defaultThresholdBytes = bytes;
+    }
+
+    public static int maxPages() {
+        return maxPages;
+    }
+
+    public static void setMaxPages(int pages) {
+        if (pages > 0) maxPages = pages;
     }
 
     /** Loads using the configured default threshold. */
@@ -61,14 +78,25 @@ public final class PdfDocuments {
         long size = java.nio.file.Files.size(path);
         StreamCacheCreateFunction cache = cacheFor(size, threshold);
         RandomAccessReadBufferedFile source = new RandomAccessReadBufferedFile(path.toFile());
+        PDDocument document;
         try {
-            return password == null
+            document = password == null
                     ? Loader.loadPDF(source, cache)
                     : Loader.loadPDF(source, password, cache);
         } catch (IOException | RuntimeException e) {
             source.close(); // Loader only adopts the source once it succeeds
             throw e;
         }
+
+        // Page count is only knowable after parsing, so the cap is applied here — the one point
+        // every tool's input passes through.
+        int pages = document.getNumberOfPages();
+        if (pages > maxPages) {
+            document.close();
+            throw ApiException.tooLarge("This PDF has " + pages + " pages; the limit is "
+                    + maxPages + ". Split it first, then try again.");
+        }
+        return document;
     }
 
     /**
