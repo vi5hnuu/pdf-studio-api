@@ -7,6 +7,7 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import lombok.extern.slf4j.Slf4j;
 import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
+import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfRedactor;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfDocuments;
 import org.springframework.http.HttpStatus;
 import org.apache.pdfbox.Loader;
@@ -875,16 +876,33 @@ public class PdfTools {
         try (PDDocument doc = PdfDocuments.load(pdfPath);
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
+            // Group by page so each page's content stream is rewritten once.
+            Map<Integer, List<java.awt.geom.Rectangle2D.Float>> byPage = new LinkedHashMap<>();
             for (RedactRegion region : regions) {
                 if (region.getPage() < 0 || region.getPage() >= doc.getNumberOfPages()) continue;
                 PDPage page = doc.getPage(region.getPage());
                 float pageHeight = page.getMediaBox().getHeight();
                 // Invert Y: PDFBox origin is bottom-left; client sends top-left origin
                 float pdfY = pageHeight - region.getY() - region.getHeight();
+                byPage.computeIfAbsent(region.getPage(), k -> new ArrayList<>()).add(
+                        new java.awt.geom.Rectangle2D.Float(
+                                region.getX(), pdfY, region.getWidth(), region.getHeight()));
+            }
+
+            for (Map.Entry<Integer, List<java.awt.geom.Rectangle2D.Float>> entry : byPage.entrySet()) {
+                PDPage page = doc.getPage(entry.getKey());
+
+                // Delete the covered content first. Drawing a black box on top of it only hides
+                // it from the eye — the glyphs stay in the content stream and come straight back
+                // out with copy/paste or any text extractor, which is the opposite of what a
+                // redaction tool promises.
+                PdfRedactor.removeContent(doc, page, entry.getValue());
 
                 try (PDPageContentStream cs = new PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
                     cs.setNonStrokingColor(Color.BLACK);
-                    cs.addRect(region.getX(), pdfY, region.getWidth(), region.getHeight());
+                    for (java.awt.geom.Rectangle2D.Float box : entry.getValue()) {
+                        cs.addRect(box.x, box.y, box.width, box.height);
+                    }
                     cs.fill();
                 }
             }
