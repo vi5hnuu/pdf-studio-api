@@ -118,7 +118,11 @@ public class PdfService {
 
     public ResponseEntity<Resource> splitPdf(String outFileName, SplitType type, Integer fixed, List<RangeModel> ranges, MultipartFile file) {
         if(List.of(SplitType.SPLIT_BY_RANGE,SplitType.DELETE_PAGES).contains(type) && (ranges==null || ranges.isEmpty())) throw new IllegalArgumentException("invalid ranges.");
-        if(SplitType.FIXED_RANGE.equals(type) && fixed==null) throw new IllegalArgumentException("invalid fixed value.");
+        // fixed is the divisor in Math.ceilDiv, so 0 threw ArithmeticException and a
+        // negative value produced an unbounded loop; both surfaced as a 500.
+        if (SplitType.FIXED_RANGE.equals(type) && (fixed == null || fixed < 1)) {
+            throw ApiException.badRequest("Pages per file must be at least 1.");
+        }
 
         if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "split-pdf";
 

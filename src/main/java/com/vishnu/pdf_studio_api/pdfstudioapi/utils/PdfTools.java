@@ -88,15 +88,33 @@ public class PdfTools {
         }
     }
 
+
+    /**
+     * Clamps a client-supplied page range to what the document actually has.
+     *
+     * <p>Ranges arrive straight from the request. A negative {@code fromPage} indexed before
+     * the first page and a {@code toPage} past the end ran off the tree — both surfaced as an
+     * IndexOutOfBoundsException and a 500, rather than simply doing nothing outside the
+     * document. Page numbering tightened this the most: its loop had no upper bound at all.
+     *
+     * @return {@code [from, to]} inclusive, or {@code null} when the range covers no page
+     */
+    static int[] clampRange(Integer fromPage, Integer toPage, int pageCount) {
+        if (pageCount <= 0) return null;
+        int from = fromPage == null ? 0 : Math.max(0, fromPage);
+        int to = toPage == null ? pageCount - 1 : Math.min(toPage, pageCount - 1);
+        if (from > to) return null;
+        return new int[]{from, to};
+    }
+
     public static byte[] watermarkPdf(PDDocument document, String text, int fontSize, ColorModel color, float opacity, double angleDegrees, Postion vPos, Postion hPos, Integer fromPage, Integer toPage) throws IOException {
-        if (fromPage == null) fromPage = 0;
-        if (toPage == null) toPage = document.getNumberOfPages() - 1;
+        int[] range = clampRange(fromPage, toPage, document.getNumberOfPages());
         if (vPos == null) vPos = Postion.CENTER;
         if (hPos == null) hPos = Postion.CENTER;
 
         PDFont font = new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD);
 
-        for (int pNo = fromPage; pNo <= toPage && pNo < document.getNumberOfPages(); pNo++) {
+        for (int pNo = range == null ? 1 : range[0]; range != null && pNo <= range[1]; pNo++) {
             PDPage page = document.getPage(pNo);
             float pageWidth = page.getMediaBox().getWidth();
             float pageHeight = page.getMediaBox().getHeight();
@@ -219,27 +237,34 @@ public class PdfTools {
     }
 
     public static byte[] imagesToPdf(List<MultipartFile> files) throws Exception {
-        PDDocument document = new PDDocument();
+        // try-with-resources: the document was previously closed only on the success path, so
+        // one unreadable image among many leaked the document and its scratch file.
+        try (PDDocument document = new PDDocument();
+             ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
 
-        for (MultipartFile file : files) {
-            BufferedImage bimg = ImageIO.read(file.getInputStream());
-            float width = bimg.getWidth();
-            float height = bimg.getHeight();
+            for (MultipartFile file : files) {
+                BufferedImage bimg = ImageIO.read(file.getInputStream());
+                if (bimg == null) {
+                    // ImageIO returns null rather than throwing for a format it cannot decode;
+                    // reading width off it produced an opaque NullPointerException.
+                    throw new IOException("Unsupported or corrupt image: " + file.getOriginalFilename());
+                }
+                float width = bimg.getWidth();
+                float height = bimg.getHeight();
 
-            PDPage page = new PDPage(new PDRectangle(width, height));
-            document.addPage(page);
+                PDPage page = new PDPage(new PDRectangle(width, height));
+                document.addPage(page);
 
-            PDImageXObject img = PDImageXObject.createFromByteArray(document, file.getBytes(), file.getName());
-            PDPageContentStream contentStream = new PDPageContentStream(document, page);
-            contentStream.drawImage(img, 0, 0);
-            contentStream.close();
+                PDImageXObject img = PDImageXObject.createFromByteArray(
+                        document, file.getBytes(), file.getOriginalFilename());
+                try (PDPageContentStream contentStream = new PDPageContentStream(document, page)) {
+                    contentStream.drawImage(img, 0, 0);
+                }
+            }
+
+            document.save(byteArrayOutputStream, CompressParameters.NO_COMPRESSION);
+            return byteArrayOutputStream.toByteArray();
         }
-        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-        document.save(byteArrayOutputStream, CompressParameters.NO_COMPRESSION);
-        document.close();
-        final byte[] bytes = byteArrayOutputStream.toByteArray();
-        byteArrayOutputStream.close();
-        return bytes;
     }
 
     public static byte[] reorderPdf(Path pdfPath, int[] order) throws Exception {
@@ -317,14 +342,15 @@ public class PdfTools {
             if (type.equals(SplitType.FIXED_RANGE)) {
                 int totalDocs = Math.ceilDiv(document.getNumberOfPages(), fixed);
                 for (int docNo = 1; docNo <= totalDocs; docNo++) {
-                    final PDDocument docX = new PDDocument();
-                    for (int pNo = (docNo - 1) * fixed; pNo < document.getNumberOfPages() && pNo < docNo * fixed; pNo++) {
-                        docX.addPage(pt.get(pNo));
+                    // try-with-resources: a failed save previously left this document open.
+                    try (PDDocument docX = new PDDocument()) {
+                        for (int pNo = (docNo - 1) * fixed; pNo < document.getNumberOfPages() && pNo < docNo * fixed; pNo++) {
+                            docX.addPage(pt.get(pNo));
+                        }
+                        ZipEntry entry = new ZipEntry("range_" + (docNo) + ".pdf");
+                        zip.putNextEntry(entry);
+                        docX.save(baos);
                     }
-                    ZipEntry entry = new ZipEntry("range_" + (docNo) + ".pdf");
-                    zip.putNextEntry(entry);
-                    docX.save(baos);
-                    docX.close();
                     zip.write(baos.toByteArray());
                     baos.reset();
                     zip.closeEntry();
@@ -387,7 +413,7 @@ public class PdfTools {
                     int fromPage = bookmarkPages.get(i);
                     int toPage = bookmarkPages.get(i + 1) - 1;
                     PDDocument docX = new PDDocument();
-                    for (int pNo = fromPage; pNo <= toPage && pNo < document.getNumberOfPages(); pNo++) {
+                    for (int pNo = Math.max(0, fromPage); pNo <= toPage && pNo < document.getNumberOfPages(); pNo++) {
                         docX.addPage(pt.get(pNo));
                     }
                     ZipEntry entry = new ZipEntry("chapter_" + (i + 1) + ".pdf");
@@ -440,11 +466,25 @@ public class PdfTools {
     }
 
     public static byte[] writePageNumbersToPages(PDDocument document, Postion vPos, Postion hPos, Integer fromPage, Integer toPage, PageNoType pageNoType, ColorModel fillColor, Padding padding, Integer size, Standard14Fonts.FontName fontName) throws IOException {
+        // The request DTO applies these defaults in its all-args constructor, but the
+        // controller builds it with the no-arg constructor when the (optional) info part is
+        // absent — so every field arrives null and this dereferenced one of them. Defaulting
+        // where the values are used means an omitted option cannot produce a 500.
+        if (pageNoType == null) pageNoType = PageNoType.ONLY_X;
+        if (fillColor == null) fillColor = ColorModel.BLACK;
+        if (vPos == null) vPos = Postion.END;
+        if (hPos == null) hPos = Postion.CENTER;
+        if (size == null) size = 14;
+        // addHeaderFooter already defaults its font this way; page numbering did not.
+        if (fontName == null) fontName = Standard14Fonts.FontName.HELVETICA;
+        if (padding == null) padding = new Padding(); // all-zero, its documented default
+
         final float defaultMargin=3.0f;
         final String toWrite = pageNoType.getType().replace("Y", String.valueOf(document.getNumberOfPages())).replace("_", " ");
         PDFont font = new PDType1Font(fontName); // You can change the font as needed
 
-        for (int pNo = fromPage; pNo <= toPage; pNo++) {
+        int[] pageRange = clampRange(fromPage, toPage, document.getNumberOfPages());
+        for (int pNo = pageRange == null ? 1 : pageRange[0]; pageRange != null && pNo <= pageRange[1]; pNo++) {
             final String text = toWrite.replace("X", String.valueOf(pNo + 1));
             float textWidth = font.getStringWidth(text) / 1000 * size;
             float textHeight = font.getFontDescriptor().getFontBoundingBox().getHeight() / 1000 * size;
@@ -633,7 +673,7 @@ public class PdfTools {
         PDFont font = new PDType1Font(fontName);
         int totalPages = document.getNumberOfPages();
 
-        for (int pNo = fromPage; pNo <= toPage && pNo < totalPages; pNo++) {
+        for (int pNo = Math.max(0, fromPage); pNo <= toPage && pNo < totalPages; pNo++) {
             PDPage page = document.getPage(pNo);
             float pageWidth = page.getMediaBox().getWidth();
             float pageHeight = page.getMediaBox().getHeight();
@@ -733,25 +773,27 @@ public class PdfTools {
         }
 
         int[] sorted = Arrays.stream(positions).sorted().toArray();
-        PDDocument newDoc = new PDDocument();
-        PDPageTree oldPages = document.getPages();
-        int totalOld = document.getNumberOfPages();
-        int insertIndex = 0;
+        // try-with-resources: newDoc was closed only after a successful save, so a failure
+        // partway through leaked it.
+        try (PDDocument newDoc = new PDDocument();
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            PDPageTree oldPages = document.getPages();
+            int totalOld = document.getNumberOfPages();
+            int insertIndex = 0;
 
-        for (int i = 0; i <= totalOld; i++) {
-            while (insertIndex < sorted.length && sorted[insertIndex] == i) {
-                newDoc.addPage(new PDPage(new PDRectangle(bWidth, bHeight)));
-                insertIndex++;
+            for (int i = 0; i <= totalOld; i++) {
+                while (insertIndex < sorted.length && sorted[insertIndex] == i) {
+                    newDoc.addPage(new PDPage(new PDRectangle(bWidth, bHeight)));
+                    insertIndex++;
+                }
+                if (i < totalOld) {
+                    newDoc.addPage(oldPages.get(i));
+                }
             }
-            if (i < totalOld) {
-                newDoc.addPage(oldPages.get(i));
-            }
+
+            newDoc.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
         }
-
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        newDoc.save(baos, CompressParameters.NO_COMPRESSION);
-        newDoc.close();
-        return baos.toByteArray();
     }
 
     public static byte[] stampPdf(Path sourcePath, Path stampPath, Float opacity, Integer fromPage, Integer toPage) throws IOException {
@@ -766,7 +808,7 @@ public class PdfTools {
             LayerUtility layerUtility = new LayerUtility(source);
             PDFormXObject stampForm = layerUtility.importPageAsForm(stamp, 0);
 
-            for (int pNo = fromPage; pNo <= toPage && pNo < source.getNumberOfPages(); pNo++) {
+            for (int pNo = Math.max(0, fromPage); pNo <= toPage && pNo < source.getNumberOfPages(); pNo++) {
                 PDPage page = source.getPage(pNo);
                 try (PDPageContentStream cs = new PDPageContentStream(source, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
                     if (opacity < 1.0f) {

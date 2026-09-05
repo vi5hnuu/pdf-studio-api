@@ -155,4 +155,41 @@ class PdfServiceToolsTest {
         }
         return false;
     }
+
+    @Test
+    @DisplayName("an out-of-range page range does nothing instead of failing")
+    void toleratesOutOfRangePages() throws Exception {
+        // toPage past the end and a negative fromPage both used to index off the page tree
+        // and surface as a 500.
+        assertPdfWithPages(service.watermarkPdf(null, "X", 24, null, 0.3f, 45.0,
+                null, null, -5, 999, upload()), 6);
+        assertPdfWithPages(service.pageNumbers(upload(), null, null, null,
+                -3, 999, null, null, null, null, null), 6);
+    }
+
+    @Test
+    @DisplayName("a range that covers no page leaves the document untouched")
+    void emptyRangeIsANoOp() throws Exception {
+        // from after to: nothing to mark, and certainly not an error.
+        assertPdfWithPages(service.watermarkPdf(null, "X", 24, null, 0.3f, 45.0,
+                null, null, 5, 2, upload()), 6);
+    }
+
+    @Test
+    @DisplayName("splitting into fixed ranges rejects a zero or negative size")
+    void rejectsInvalidFixedRange() {
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.splitPdf(null, com.vishnu.pdf_studio_api.pdfstudioapi.enums.SplitType.FIXED_RANGE,
+                        0, null, upload()));
+        assertTrue(containsApiException(ex), "expected a 400, got: " + ex);
+    }
+
+    @Test
+    @DisplayName("image-to-pdf reports an unreadable image rather than a null dereference")
+    void rejectsUnreadableImage() {
+        var notAnImage = new MockMultipartFile("files", "a.png", "image/png",
+                "this is not an image".getBytes());
+        assertThrows(RuntimeException.class,
+                () -> service.imageToPdf(null, java.util.List.of(notAnImage)));
+    }
 }
