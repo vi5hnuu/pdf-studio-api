@@ -223,6 +223,44 @@ public class CreditsService {
         return new GrantResult(account.getBalance(), grant);
     }
 
+    /**
+     * Moves a guest's remaining balance onto the account they just signed in to.
+     *
+     * <p>The web hands out a guest session so tools work before anyone signs in, and that
+     * guest earns the welcome and daily credits. Signing in switches the caller to a
+     * different auth instance and therefore a different account key, so without this their
+     * credits would simply vanish at the moment they created an account — the worst possible
+     * time to lose something.
+     *
+     * <p>Idempotent: the ledger's unique {@code (user_id, idempotency_key)} means a repeated
+     * transfer of the same guest is recorded once, and the guest is drained to zero so a
+     * replay has nothing left to move.
+     *
+     * @return credits moved
+     */
+    @Transactional
+    public int transferGuestBalance(String guestUserId, String targetUserId, String ip) {
+        if (guestUserId == null || guestUserId.equals(targetUserId)) return 0;
+
+        var guestAccount = accountRepository.findForUpdate(guestUserId).orElse(null);
+        if (guestAccount == null || guestAccount.getBalance() <= 0) return 0;
+
+        final int amount = guestAccount.getBalance();
+        final String key = "guest-transfer:" + guestUserId;
+
+        // Already moved (a retried sign-in) — leave both balances alone.
+        if (ledgerRepository.existsByUserIdAndIdempotencyKey(targetUserId, key)) return 0;
+
+        accountService.ensure(targetUserId, ip);
+        CreditAccount target = lockAccount(targetUserId);
+
+        applyDelta(guestAccount, -amount, CreditReason.TRANSFER, null, key, ip);
+        applyDelta(target, amount, CreditReason.TRANSFER, null, key, ip);
+
+        log.info("Transferred {} credit(s) from guest {} to {}", amount, guestUserId, targetUserId);
+        return amount;
+    }
+
     // ── Purchases ─────────────────────────────────────────────────────────────────
 
     /**

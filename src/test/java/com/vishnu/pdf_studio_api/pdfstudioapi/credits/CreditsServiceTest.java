@@ -130,4 +130,47 @@ class CreditsServiceTest {
         assertEquals(-1, row.get().getDelta());
         assertEquals(result.balanceRemaining(), row.get().getBalanceAfter());
     }
+
+    @Test
+    @DisplayName("a guest's credits move to the account they sign in to")
+    void transfersGuestBalance() {
+        String guest = "web:" + UUID.randomUUID();
+        String account = "app:" + UUID.randomUUID();
+
+        int guestOpening = creditsService.getBalance(guest, null);
+        int accountOpening = creditsService.getBalance(account, null);
+        assertTrue(guestOpening > 0, "the guest should have earned its welcome credits");
+
+        int moved = creditsService.transferGuestBalance(guest, account, null);
+
+        assertEquals(guestOpening, moved);
+        assertEquals(0, creditsService.getBalance(guest, null), "the guest is drained");
+        assertEquals(accountOpening + guestOpening, creditsService.getBalance(account, null));
+    }
+
+    @Test
+    @DisplayName("signing in twice does not move the credits twice")
+    void transferIsIdempotent() {
+        String guest = "web:" + UUID.randomUUID();
+        String account = "app:" + UUID.randomUUID();
+        creditsService.getBalance(guest, null);
+        int accountOpening = creditsService.getBalance(account, null);
+
+        int first = creditsService.transferGuestBalance(guest, account, null);
+        int second = creditsService.transferGuestBalance(guest, account, null);
+
+        assertTrue(first > 0);
+        assertEquals(0, second, "a repeated transfer moves nothing");
+        assertEquals(accountOpening + first, creditsService.getBalance(account, null));
+    }
+
+    @Test
+    @DisplayName("transferring to the same account, or from an empty guest, is a no-op")
+    void transferNoOps() {
+        String account = "app:" + UUID.randomUUID();
+        creditsService.getBalance(account, null);
+
+        assertEquals(0, creditsService.transferGuestBalance(account, account, null));
+        assertEquals(0, creditsService.transferGuestBalance("web:never-seen-" + UUID.randomUUID(), account, null));
+    }
 }

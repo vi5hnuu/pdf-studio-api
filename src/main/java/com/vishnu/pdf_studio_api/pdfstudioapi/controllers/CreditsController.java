@@ -1,6 +1,8 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.controllers;
 
+import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
 import com.vishnu.pdf_studio_api.pdfstudioapi.security.CurrentUser;
+import com.vishnu.pdf_studio_api.pdfstudioapi.security.IssuerTokenDecoders;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.CreditsService;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.ClientIp;
 import jakarta.servlet.http.HttpServletRequest;
@@ -21,6 +23,7 @@ import java.util.Map;
 public class CreditsController {
 
     private final CreditsService creditsService;
+    private final IssuerTokenDecoders issuerTokenDecoders;
 
     @GetMapping("/balance")
     public ResponseEntity<Map<String, Object>> balance(HttpServletRequest request) {
@@ -46,6 +49,32 @@ public class CreditsController {
             @RequestParam(defaultValue = "25") int size) {
         var result = creditsService.listLedger(CurrentUser.requireId(), page, size);
         return ResponseEntity.ok(Map.of("success", true, "data", result));
+    }
+
+    /**
+     * Carries a guest's remaining credits onto the account the caller just signed in to.
+     *
+     * <p>The web works anonymously until someone signs in, and that guest session earns the
+     * welcome and daily credits. Signing in moves the caller to a different auth instance and
+     * therefore a different account, so without this their balance would disappear at exactly
+     * the moment they created an account.
+     *
+     * <p>The guest's own access token is the proof of ownership — it is validated here, not
+     * trusted — and the transfer is idempotent.
+     */
+    @PostMapping("/transfer-guest")
+    public ResponseEntity<Map<String, Object>> transferGuest(@RequestBody Map<String, String> body,
+                                                             HttpServletRequest request) {
+        String guestPrincipal = issuerTokenDecoders.principalKeyOf(body.get("guestToken"))
+                .orElseThrow(() -> ApiException.badRequest("That guest session is no longer valid."));
+
+        int moved = creditsService.transferGuestBalance(
+                guestPrincipal, CurrentUser.requireId(), ClientIp.of(request));
+
+        return ResponseEntity.ok(Map.of("success", true,
+                "message", moved > 0 ? "Your credits have been moved to your account." : "Nothing to move.",
+                "data", Map.of("transferred", moved,
+                        "credits", creditsService.getBalance(CurrentUser.requireId(), ClientIp.of(request)))));
     }
 
     @PostMapping("/purchase")

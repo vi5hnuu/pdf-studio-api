@@ -7,5 +7,6 @@ public enum CreditReason {
     DEBIT,        // consumed by a paid tool
     REWARDED_AD,  // granted for watching a rewarded ad
     DAILY,        // daily free allowance claim
-    REVOKE        // clawback for a refunded/voided purchase
+    REVOKE,       // clawback for a refunded/voided purchase
+    TRANSFER      // guest balance carried onto an account at sign-in
 }

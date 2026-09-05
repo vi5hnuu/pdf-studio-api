@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
     user_id         VARCHAR(64) NOT NULL,
     tool_id         VARCHAR(64) DEFAULT NULL,                 -- set for DEBIT rows
     delta           INT         NOT NULL,                     -- signed change
-    reason          VARCHAR(16) NOT NULL,                     -- WELCOME|PURCHASE|DEBIT|REWARDED_AD|DAILY|REVOKE
+    reason          VARCHAR(16) NOT NULL,                     -- WELCOME|PURCHASE|DEBIT|REWARDED_AD|DAILY|REVOKE|TRANSFER
     idempotency_key VARCHAR(100) DEFAULT NULL,
     balance_after   INT         NOT NULL,
     ip              VARCHAR(64) DEFAULT NULL,
