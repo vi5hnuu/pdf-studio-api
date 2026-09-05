@@ -3,6 +3,7 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.configuration;
 import lombok.NonNull;
 import org.springframework.http.HttpHeaders;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
@@ -16,13 +17,27 @@ public class CorsConfig implements WebMvcConfigurer {
 
     private final Environment environment;
 
+    /**
+     * Browser origins allowed to call this API, comma-separated.
+     *
+     * <p>Previously hardcoded per profile, so adding a preview deployment, a second domain or
+     * a different local port meant editing and redeploying the service.
+     */
+    @Value("${app.cors.allowed-origins:}")
+    private String configuredOrigins;
+
     @Override
     public void addCorsMappings(@NonNull CorsRegistry registry) {
 
         String[] allowedOrigins;
 
-        // Allow localhost when running locally (no profile or explicit "dev"); restrict to prod domains only in "prod"
-        if (Arrays.asList(environment.getActiveProfiles()).contains("prod")) {
+        // An explicit list always wins, so a deployment can add an origin without a code change.
+        if (configuredOrigins != null && !configuredOrigins.isBlank()) {
+            allowedOrigins = Arrays.stream(configuredOrigins.split(","))
+                    .map(String::trim).filter(o -> !o.isEmpty()).toArray(String[]::new);
+        }
+        // Otherwise: localhost when running locally, the product domains in "prod".
+        else if (Arrays.asList(environment.getActiveProfiles()).contains("prod")) {
             allowedOrigins = new String[]{
                     "https://pdf-studio.laxmi.solutions",
                     "https://pdf-studio-vi.onrender.com"
