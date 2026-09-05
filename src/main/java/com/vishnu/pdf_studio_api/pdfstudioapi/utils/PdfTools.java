@@ -6,7 +6,9 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import lombok.extern.slf4j.Slf4j;
+import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfDocuments;
+import org.springframework.http.HttpStatus;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.multipdf.LayerUtility;
 import org.apache.pdfbox.multipdf.PDFMergerUtility;
@@ -392,7 +394,8 @@ public class PdfTools {
             } else if (type.equals(SplitType.SPLIT_BY_BOOKMARK)) {
                 // Collect top-level bookmark page indices using PDFBox outline API
                 PDDocumentOutline outline = document.getDocumentCatalog().getDocumentOutline();
-                if (outline == null) throw new IOException("PDF has no outline/bookmarks");
+                if (outline == null) throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "NO_BOOKMARKS",
+                        "This PDF has no bookmarks to work with.");
 
                 List<Integer> bookmarkPages = new ArrayList<>();
                 PDOutlineItem item = outline.getFirstChild();
@@ -405,7 +408,8 @@ public class PdfTools {
                     item = item.getNextSibling();
                 }
 
-                if (bookmarkPages.isEmpty()) throw new IOException("No navigable bookmarks found in this PDF");
+                if (bookmarkPages.isEmpty()) throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "NO_BOOKMARKS",
+                        "This PDF has no bookmarks that point at a page.");
                 java.util.Collections.sort(bookmarkPages);
                 bookmarkPages.add(document.getNumberOfPages()); // sentinel for last chapter end
 
@@ -983,7 +987,9 @@ public class PdfTools {
                 }
             }
             zip.finish();
-            if (count == 0) throw new IOException("No extractable images found in this PDF");
+            if (count == 0) throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "NOTHING_TO_EXTRACT",
+                    "This PDF contains no embedded images. Pages drawn with text or vector "
+                            + "graphics have no images to pull out.");
             return zipBaos.toByteArray();
         }
     }
@@ -1182,7 +1188,8 @@ public class PdfTools {
                 writeEmbeddedNode(names.getEmbeddedFiles(), zip, count);
             }
             zip.finish();
-            if (count[0] == 0) throw new IOException("This PDF has no embedded files");
+            if (count[0] == 0) throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "NOTHING_TO_EXTRACT",
+                    "This PDF has no file attachments.");
             return zipBaos.toByteArray();
         }
     }
@@ -1320,7 +1327,9 @@ public class PdfTools {
             PDAcroForm form = doc.getDocumentCatalog().getAcroForm();
             if (form != null) extractFontsFromResources(form.getDefaultResources(), zip, count, seen);
             zip.finish();
-            if (count[0] == 0) throw new IOException("This PDF has no embedded fonts");
+            if (count[0] == 0) throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "NOTHING_TO_EXTRACT",
+                    "This PDF has no embedded fonts. It may rely on fonts installed on the "
+                            + "reader's system instead.");
             return zipBaos.toByteArray();
         }
     }
