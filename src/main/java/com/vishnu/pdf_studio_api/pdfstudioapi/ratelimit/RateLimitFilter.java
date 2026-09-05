@@ -43,20 +43,33 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class RateLimitFilter extends OncePerRequestFilter {
 
-    /** Only the tool endpoints are limited; credits, docs and health are not. */
+    /** Tool and credit endpoints are limited; docs and health are not. */
     private static final String[] GUARDED_PREFIXES = {
-            "/api/v1/pdf-studio/", "/api/v1/image-studio/"
+            "/api/v1/pdf-studio/", "/api/v1/image-studio/", "/api/v1/credits/"
     };
+
+    /**
+     * The Play RTDN webhook is exempt: it is machine-to-machine, authenticated by an OIDC
+     * token and shared secret, and throttling it would make Pub/Sub retry deliveries that
+     * were only rejected because they arrived in a burst.
+     */
+    private static final String RTDN_PATH = "/api/v1/credits/play-rtdn";
 
     /**
      * Tools that rasterise or convert every page. These dominate CPU and memory, so they draw on
      * an additional, much smaller bucket.
      */
+    /**
+     * Credit endpoints that cost real money or real work per call: redeeming a purchase
+     * makes an outbound Google Play request, and the grant endpoints mutate a balance under
+     * a row lock. They draw on the tight bucket so neither can be hammered.
+     */
     private static final Set<String> HEAVY_TOOLS = Set.of(
             "pdf-to-jpg", "pdf-to-word", "pdf-to-excel", "pdf-to-pptx",
             "compress-pdf", "grayscale-pdf", "remove-blank-pages", "analyze-pdf",
             "optimize-pdf", "repair-pdf", "extract-images", "n-up", "redact-pdf",
-            "split-by-size", "image-to-pdf"
+            "split-by-size", "image-to-pdf",
+            "purchase", "rewarded", "daily"
     );
 
     private final RateLimitProperties properties;
@@ -71,6 +84,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         if (!properties.isEnabled()) return true;
         String uri = request.getRequestURI();
+        if (uri.startsWith(RTDN_PATH)) return true;
         for (String prefix : GUARDED_PREFIXES) {
             if (uri.startsWith(prefix)) return false;
         }
