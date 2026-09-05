@@ -83,7 +83,7 @@ class CreditsEndpointTest {
         mockMvc.perform(put("/api/v1/admin/tool-costs/grayscale-pdf")
                         .contentType("application/json")
                         .content("""
-                                {"baseCredits":5,"sizeUnit":"NONE","creditsPerUnit":0,"unitSize":1,"active":true}""")
+                                {"base_credits":5,"size_unit":"NONE","credits_per_unit":0,"unit_size":1,"active":true}""")
                         .with(as("app:" + UUID.randomUUID())))
                 .andExpect(status().isForbidden());
     }
@@ -96,7 +96,7 @@ class CreditsEndpointTest {
         mockMvc.perform(put("/api/v1/admin/tool-costs/crop-pdf")
                         .contentType("application/json")
                         .content("""
-                                {"baseCredits":7,"sizeUnit":"NONE","creditsPerUnit":0,"unitSize":1,"active":true}""")
+                                {"base_credits":7,"size_unit":"NONE","credits_per_unit":0,"unit_size":1,"active":true}""")
                         .with(as("app:admin-" + UUID.randomUUID(), "ROLE_ADMIN")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.baseCredits").value(7));
@@ -112,7 +112,7 @@ class CreditsEndpointTest {
         mockMvc.perform(put("/api/v1/admin/tool-costs/not-a-real-tool")
                         .contentType("application/json")
                         .content("""
-                                {"baseCredits":1,"sizeUnit":"NONE","creditsPerUnit":0,"unitSize":1,"active":true}""")
+                                {"base_credits":1,"size_unit":"NONE","credits_per_unit":0,"unit_size":1,"active":true}""")
                         .with(as("app:admin-" + UUID.randomUUID(), "ROLE_ADMIN")))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("TOOL_NOT_FOUND"));
