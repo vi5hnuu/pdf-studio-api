@@ -1665,6 +1665,34 @@ public class PdfTools {
      * Removes pages where >= threshold fraction of pixels are near-white (>= 240 grayscale).
      * Renders at 72 DPI for speed. Returns original bytes if all or no pages would be removed.
      */
+    /**
+     * Result of a blank-page removal, so the caller can distinguish "removed nothing"
+     * from "removed several" — returning only the bytes made a no-op look like a success.
+     */
+    public record BlankPageResult(byte[] document, int removed) {}
+
+    /** @return the cleaned document plus how many pages were dropped. */
+    public static BlankPageResult removeBlankPagesDetailed(Path pdfPath, float threshold) throws IOException {
+        try (PDDocument src = PdfDocuments.load(pdfPath)) {
+            PDFRenderer renderer = new PDFRenderer(src);
+            List<Integer> keepPages = new ArrayList<>();
+            for (int i = 0; i < src.getNumberOfPages(); i++) {
+                BufferedImage img = renderer.renderImageWithDPI(i, 72, ImageType.GRAY);
+                if (!isBlankPage(img, threshold)) keepPages.add(i);
+            }
+            final int removed = src.getNumberOfPages() - keepPages.size();
+            if (keepPages.isEmpty() || removed == 0) {
+                return new BlankPageResult(Files.readAllBytes(pdfPath), 0);
+            }
+            try (PDDocument out = new PDDocument();
+                 ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                for (int idx : keepPages) out.importPage(src.getPage(idx));
+                out.save(baos, CompressParameters.NO_COMPRESSION);
+                return new BlankPageResult(baos.toByteArray(), removed);
+            }
+        }
+    }
+
     public static byte[] removeBlankPages(Path pdfPath, float threshold) throws IOException {
         try (PDDocument src = PdfDocuments.load(pdfPath)) {
             PDFRenderer renderer = new PDFRenderer(src);

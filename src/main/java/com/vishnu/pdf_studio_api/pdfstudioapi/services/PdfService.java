@@ -2,6 +2,7 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.RedactPdfRequest.RedactRegion;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
+import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.LoadProperties;
@@ -21,6 +22,7 @@ import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
@@ -194,6 +196,13 @@ public class PdfService {
             if (document.isEncrypted()) throw new Exception("document is protected, please remove password first");
 
             String text = PdfTools.extractText(document);
+            if (text.isBlank()) {
+                // A scanned PDF is images with no text layer. Returning an empty file with a
+                // 200 left the user to guess; this names the actual reason.
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "NO_TEXT_LAYER",
+                        "This PDF has no selectable text — it looks like a scan. "
+                                + "Text extraction needs a PDF with a text layer.");
+            }
             byte[] textBytes = text.getBytes(StandardCharsets.UTF_8);
             ByteArrayResource baR = new ByteArrayResource(textBytes);
 
@@ -667,10 +676,14 @@ public class PdfService {
     public ResponseEntity<Resource> removeBlankPages(String outFileName, float threshold, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "no-blank-pages";
         try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
-            byte[] doc = PdfTools.removeBlankPages(upload.path(), threshold);
+            var result = PdfTools.removeBlankPagesDetailed(upload.path(), threshold);
+            byte[] doc = result.document();
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
+            // Without this the client cannot tell a no-op from a successful removal, since
+            // both return 200 with a valid PDF.
+            headers.add("X-Pages-Removed", String.valueOf(result.removed()));
             headers.setContentLength(doc.length);
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             return ResponseEntity.ok().headers(headers).body(baR);
