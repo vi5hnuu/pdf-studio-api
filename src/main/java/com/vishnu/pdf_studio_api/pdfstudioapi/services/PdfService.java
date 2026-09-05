@@ -165,15 +165,15 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> watermarkPdf(String outFileName, String text, Integer fontSize, ColorModel color, Float opacity, Double angle, Postion vPos, Postion hPos, Integer fromPage, Integer toPage, MultipartFile file) {
+    public ResponseEntity<Resource> watermarkPdf(String outFileName, String text, Integer fontSize, ColorModel color, Float opacity, Double angle, Position vPos, Position hPos, Integer fromPage, Integer toPage, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "watermarked-pdf";
         if (text == null || text.isBlank()) text = "CONFIDENTIAL";
         if (fontSize == null) fontSize = 48;
         if (color == null) color = ColorModel.BLACK;
         if (opacity == null) opacity = 0.3f;
         if (angle == null) angle = 45.0;
-        if (vPos == null) vPos = Postion.CENTER;
-        if (hPos == null) hPos = Postion.CENTER;
+        if (vPos == null) vPos = Position.CENTER;
+        if (hPos == null) hPos = Position.CENTER;
         if (fromPage == null) fromPage = 0;
 
         try (OpenPdf opened = openPdf(file)) {
@@ -797,7 +797,7 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> pageNumbers(MultipartFile file, String outFileName, Postion vPos, Postion hPos, Integer fromPage, Integer toPage, PageNoType pageNoType, ColorModel fillColor, Padding padding, Integer size, Standard14Fonts.FontName fontName) {
+    public ResponseEntity<Resource> pageNumbers(MultipartFile file, String outFileName, Position vPos, Position hPos, Integer fromPage, Integer toPage, PageNoType pageNoType, ColorModel fillColor, Padding padding, Integer size, Standard14Fonts.FontName fontName) {
         outFileName = FileNames.safeBaseName(outFileName, FileNames.stripExtension(file.getOriginalFilename()));
 
         try (OpenPdf opened = openPdf(file)) {

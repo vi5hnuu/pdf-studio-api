@@ -20,7 +20,7 @@ import java.time.LocalDate;
  * someone from the table.
  */
 @Entity
-@Table(name = "credit_grant_ip",
+@Table(name = "credit_ip_grants",
         uniqueConstraints = @UniqueConstraint(name = "uq_grant_ip_kind_day",
                 columnNames = {"ip_hash", "grant_kind", "grant_date"}))
 @Getter

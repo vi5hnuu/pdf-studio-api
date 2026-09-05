@@ -21,10 +21,9 @@ import java.time.Instant;
  * as "already redeemed". A fixed-width hash indexes exactly and cannot collide in practice.
  */
 @Entity
-@Table(name = "purchase_audit_log",
+@Table(name = "purchase_audit_logs",
         uniqueConstraints = @UniqueConstraint(name = "uq_pal_token_hash_status",
-                columnNames = {"token_hash", "status"}),
-        indexes = @Index(name = "idx_pal_user", columnList = "user_id"))
+                columnNames = {"token_hash", "status"}))
 @Getter
 @Setter
 @NoArgsConstructor

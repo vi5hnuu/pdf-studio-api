@@ -43,10 +43,12 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
     PRIMARY KEY (id),
     -- Makes a retried tool request safe: the same key is charged exactly once.
     UNIQUE KEY uq_ledger_user_idem (user_id, idempotency_key),
-    KEY idx_ledger_user (user_id)
+    KEY idx_ledger_user (user_id),
+    -- The rewarded-ad daily cap filters by reason and time as well as user.
+    KEY idx_ledger_user_reason_time (user_id, reason, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE IF NOT EXISTS purchase_audit_log (
+CREATE TABLE IF NOT EXISTS purchase_audit_logs (
     id              BIGINT       NOT NULL AUTO_INCREMENT,
     user_id         VARCHAR(64)  NOT NULL,
     purchase_token  VARCHAR(512) NOT NULL,
@@ -62,14 +64,13 @@ CREATE TABLE IF NOT EXISTS purchase_audit_log (
     ip              VARCHAR(64)  DEFAULT NULL,
     created_at      DATETIME(6)  NOT NULL,
     PRIMARY KEY (id),
-    UNIQUE KEY uq_pal_token_hash_status (token_hash, status),
-    KEY idx_pal_user (user_id)
+    UNIQUE KEY uq_pal_token_hash_status (token_hash, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Free grants are rationed per client IP as well as per account: per-account limits only
 -- deter abuse when accounts are costly, and the web tier mints guest accounts on demand.
 -- The IP is stored only as a salted hash.
-CREATE TABLE IF NOT EXISTS credit_grant_ip (
+CREATE TABLE IF NOT EXISTS credit_ip_grants (
     id          BIGINT      NOT NULL AUTO_INCREMENT,
     ip_hash     VARCHAR(64) NOT NULL,
     grant_kind  VARCHAR(16) NOT NULL,                         -- WELCOME | DAILY

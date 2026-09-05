@@ -107,10 +107,10 @@ public class PdfTools {
         return new int[]{from, to};
     }
 
-    public static byte[] watermarkPdf(PDDocument document, String text, int fontSize, ColorModel color, float opacity, double angleDegrees, Postion vPos, Postion hPos, Integer fromPage, Integer toPage) throws IOException {
+    public static byte[] watermarkPdf(PDDocument document, String text, int fontSize, ColorModel color, float opacity, double angleDegrees, Position vPos, Position hPos, Integer fromPage, Integer toPage) throws IOException {
         int[] range = clampRange(fromPage, toPage, document.getNumberOfPages());
-        if (vPos == null) vPos = Postion.CENTER;
-        if (hPos == null) hPos = Postion.CENTER;
+        if (vPos == null) vPos = Position.CENTER;
+        if (hPos == null) hPos = Position.CENTER;
 
         PDFont font = new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD);
 
@@ -465,15 +465,15 @@ public class PdfTools {
         return combinedImage;
     }
 
-    public static byte[] writePageNumbersToPages(PDDocument document, Postion vPos, Postion hPos, Integer fromPage, Integer toPage, PageNoType pageNoType, ColorModel fillColor, Padding padding, Integer size, Standard14Fonts.FontName fontName) throws IOException {
+    public static byte[] writePageNumbersToPages(PDDocument document, Position vPos, Position hPos, Integer fromPage, Integer toPage, PageNoType pageNoType, ColorModel fillColor, Padding padding, Integer size, Standard14Fonts.FontName fontName) throws IOException {
         // The request DTO applies these defaults in its all-args constructor, but the
         // controller builds it with the no-arg constructor when the (optional) info part is
         // absent — so every field arrives null and this dereferenced one of them. Defaulting
         // where the values are used means an omitted option cannot produce a 500.
         if (pageNoType == null) pageNoType = PageNoType.ONLY_X;
         if (fillColor == null) fillColor = ColorModel.BLACK;
-        if (vPos == null) vPos = Postion.END;
-        if (hPos == null) hPos = Postion.CENTER;
+        if (vPos == null) vPos = Position.END;
+        if (hPos == null) hPos = Position.CENTER;
         if (size == null) size = 14;
         // addHeaderFooter already defaults its font this way; page numbering did not.
         if (fontName == null) fontName = Standard14Fonts.FontName.HELVETICA;
@@ -496,15 +496,15 @@ public class PdfTools {
             float pageHeight = page.getMediaBox().getHeight();
 
             float xCoord = switch (hPos) {
-                case Postion.START -> padding.getLeft() + defaultMargin;
-                case Postion.CENTER -> Math.max(0, pageWidth / 2 - textWidth / 2.0f);
-                case Postion.END -> Math.max(0, pageWidth - textWidth - padding.getRight()-defaultMargin);
+                case Position.START -> padding.getLeft() + defaultMargin;
+                case Position.CENTER -> Math.max(0, pageWidth / 2 - textWidth / 2.0f);
+                case Position.END -> Math.max(0, pageWidth - textWidth - padding.getRight()-defaultMargin);
             };
 
             float yCoord = switch (vPos) {
-                case Postion.START -> pageHeight - textHeight - padding.getTop()-defaultMargin;
-                case Postion.CENTER -> pageHeight / 2-textHeight/2.0f;
-                case Postion.END -> padding.getBottom()+defaultMargin;
+                case Position.START -> pageHeight - textHeight - padding.getTop()-defaultMargin;
+                case Position.CENTER -> pageHeight / 2-textHeight/2.0f;
+                case Position.END -> padding.getBottom()+defaultMargin;
             };
 
             try (PDPageContentStream contentStream = new PDPageContentStream(document, page, PDPageContentStream.AppendMode.APPEND, false, true)) {

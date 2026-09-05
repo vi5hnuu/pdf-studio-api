@@ -15,7 +15,10 @@ import java.time.Instant;
 @Table(name = "credit_ledger",
         uniqueConstraints = @UniqueConstraint(name = "uq_ledger_user_idem",
                 columnNames = {"user_id", "idempotency_key"}),
-        indexes = @Index(name = "idx_ledger_user", columnList = "user_id"))
+        indexes = {
+                @Index(name = "idx_ledger_user", columnList = "user_id"),
+                @Index(name = "idx_ledger_user_reason_time", columnList = "user_id, reason, created_at")
+        })
 @Getter
 @Setter
 @NoArgsConstructor
