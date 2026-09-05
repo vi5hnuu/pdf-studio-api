@@ -38,7 +38,7 @@ public class ToolCreditCost {
     @Builder.Default
     private int creditsPerUnit = 0;
 
-    /** Block size for the size component (e.g. 5_000_000 bytes, or 25 pages). */
+    /** Block size for the size component, in bytes (e.g. 5_000_000 = one credit per 5 MB). */
     @Column(name = "unit_size", nullable = false)
     @Builder.Default
     private long unitSize = 1;
@@ -48,7 +48,7 @@ public class ToolCreditCost {
     private boolean active = true;
 
     /**
-     * Computes the total credit cost for a given size metric (bytes or pages, per {@link #sizeUnit}).
+     * Computes the total credit cost for a given input size in bytes (per {@link #sizeUnit}).
      * A non-positive/irrelevant size just yields the base.
      */
     public int computeCost(long sizeMetric) {

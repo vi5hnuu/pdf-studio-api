@@ -13,6 +13,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Map;
 
@@ -50,23 +51,45 @@ public class BillingWebhookController {
         if (!isAuthorized(secret, request)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
+        final JsonNode notification;
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> message = (Map<String, Object>) body.get("message");
             if (message == null) return ResponseEntity.ok().build();
             String data = (String) message.get("data");
             if (data == null) return ResponseEntity.ok().build();
+            notification = objectMapper.readTree(
+                    new String(Base64.getDecoder().decode(data), StandardCharsets.UTF_8));
+        } catch (Exception malformed) {
+            // A payload we cannot parse will never parse — acking stops Pub/Sub retrying forever.
+            log.error("Unparseable Play RTDN, acking to stop redelivery: {}", malformed.getMessage());
+            return ResponseEntity.ok().build();
+        }
 
-            JsonNode notification = objectMapper.readTree(new String(Base64.getDecoder().decode(data)));
+        try {
             JsonNode voided = notification.get("voidedPurchaseNotification");
             if (voided != null && voided.hasNonNull("purchaseToken")) {
                 creditsService.revokeCreditsForToken(voided.get("purchaseToken").asText());
+                return ResponseEntity.ok().build();
             }
-        } catch (Exception e) {
-            // Never fail the webhook on a parse issue — log and ack to avoid redelivery storms.
-            log.error("Failed to process Play RTDN: {}", e.getMessage());
+
+            // A purchase that completed while the app was killed is never redeemed by the client,
+            // so the server credits it here rather than leaving the user paid-but-uncredited.
+            JsonNode oneTime = notification.get("oneTimeProductNotification");
+            if (oneTime != null && oneTime.hasNonNull("purchaseToken") && oneTime.hasNonNull("sku")) {
+                creditsService.reconcilePurchase(
+                        oneTime.get("purchaseToken").asText(), oneTime.get("sku").asText());
+            }
+            // testNotification and anything unrecognised are intentionally ignored.
+            return ResponseEntity.ok().build();
+
+        } catch (Exception processingFailure) {
+            // A transient failure here (database down mid-clawback) must NOT be acked: acking would
+            // discard the notification permanently and leave revoked credits spendable. Returning
+            // 5xx makes Pub/Sub redeliver, and the handlers are idempotent.
+            log.error("Failed to process Play RTDN, returning 500 for redelivery", processingFailure);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
-        return ResponseEntity.ok().build();
     }
 
     /**

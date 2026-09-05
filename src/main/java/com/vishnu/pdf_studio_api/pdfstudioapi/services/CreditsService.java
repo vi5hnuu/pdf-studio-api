@@ -5,6 +5,7 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.enums.CreditReason;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.PurchaseStatus;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.repository.*;
+import com.vishnu.pdf_studio_api.pdfstudioapi.util.PurchaseTokens;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -56,9 +57,37 @@ public class CreditsService {
         return costRepository.findByActiveTrueOrderByToolIdAsc();
     }
 
-    /** Resolves a tool's cost for the given size metric; unknown tool ⇒ 0 (free, fail-open). */
-    public int resolveCost(String toolId, long sizeMetric) {
-        return costRepository.findById(toolId).map(c -> c.computeCost(sizeMetric)).orElse(0);
+    /**
+     * Resolves a tool's cost for the given input size in bytes.
+     *
+     * <p>An unknown tool id still yields 0 — refusing service because of a pricing gap would be
+     * worse for the user than serving it free — but it is logged loudly, because it means a
+     * premium tool is silently free. {@code ToolCostConsistencyChecker} turns the same condition
+     * into a startup failure so it is caught before deployment rather than in the billing data.
+     */
+    public int resolveCost(String toolId, long sizeBytes) {
+        var cost = costRepository.findById(toolId);
+        if (cost.isEmpty()) {
+            log.warn("No tool_credit_costs row for tool '{}' — serving it FREE. Add a row to price it.",
+                    toolId);
+            return 0;
+        }
+        return cost.get().computeCost(sizeBytes);
+    }
+
+    /**
+     * Current balance without creating an account.
+     *
+     * <p>Used by the charging aspect's fast pre-check: {@link #getBalance} creates the account (in
+     * its own transaction) as a side effect, which is wasted work on the pre-check path since
+     * {@link #charge} ensures it anyway.
+     *
+     * @return empty when the user has no account yet
+     */
+    public java.util.OptionalInt peekBalance(String userId) {
+        return accountRepository.findById(userId)
+                .map(a -> java.util.OptionalInt.of(a.getBalance()))
+                .orElseGet(java.util.OptionalInt::empty);
     }
 
     /** True if a debit with this idempotency key already happened (a retry). */
@@ -77,7 +106,17 @@ public class CreditsService {
      * @throws ResponseStatusException 402 when the balance is insufficient.
      */
     @Transactional
-    public ChargeResult charge(String userId, String toolId, long sizeMetric,
+    public ChargeResult charge(String userId, String toolId, long sizeBytes,
+                               String idempotencyKey, String ip) {
+        return charge(userId, toolId, resolveCost(toolId, sizeBytes), idempotencyKey, ip);
+    }
+
+    /**
+     * As {@link #charge(String, String, long, String, String)} but with the cost already resolved,
+     * so the caller's pre-check and this debit agree on one price and hit the cost table once.
+     */
+    @Transactional
+    public ChargeResult charge(String userId, String toolId, int cost,
                                String idempotencyKey, String ip) {
         accountService.ensure(userId, ip);
         CreditAccount account = lockAccount(userId);
@@ -89,7 +128,6 @@ public class CreditsService {
             }
         }
 
-        final int cost = resolveCost(toolId, sizeMetric);
         if (cost <= 0) {
             return new ChargeResult(account.getBalance(), 0, false); // free tool — no debit
         }
@@ -161,14 +199,14 @@ public class CreditsService {
         if (creditsToAdd == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown product: " + productId);
         }
-        if (purchaseAuditLogRepository.existsByPurchaseTokenAndStatus(purchaseToken, PurchaseStatus.GRANTED)) {
+        if (purchaseAuditLogRepository.existsByTokenHashAndStatus(PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "This purchase was already redeemed.");
         }
 
         var result = playStoreVerifier.verifyInAppPurchase(productId, purchaseToken);
         if (!result.valid()) {
-            if (!purchaseAuditLogRepository.existsByPurchaseTokenAndStatus(
-                    purchaseToken, PurchaseStatus.VERIFICATION_FAILED)) {
+            if (!purchaseAuditLogRepository.existsByTokenHashAndStatus(
+                    PurchaseTokens.hash(purchaseToken), PurchaseStatus.VERIFICATION_FAILED)) {
                 saveAudit(userId, purchaseToken, null, productId, PurchaseStatus.VERIFICATION_FAILED, null, ip);
             }
             throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
@@ -191,15 +229,63 @@ public class CreditsService {
         return account.getBalance();
     }
 
+    /**
+     * Credits a purchase the client never redeemed, driven by a Play RTDN.
+     *
+     * <p>Without this, a purchase that completes while the app is killed (or that fails to reach
+     * {@code /credits/purchase} before the process dies) leaves the user charged by Google and
+     * uncredited by us, with no path to recovery but a support ticket.
+     *
+     * <p>RTDN carries only the token, so the owning user comes from the obfuscated external account
+     * id the client attaches when starting the purchase. If it is absent — an older client build —
+     * this logs and does nothing rather than guessing an account to credit; the client's own
+     * redemption still works.
+     */
+    @Transactional
+    public void reconcilePurchase(String purchaseToken, String productId) {
+        if (purchaseToken == null || purchaseToken.isBlank()) return;
+        if (PRODUCT_CREDITS.get(productId) == null) {
+            log.warn("RTDN for unknown product '{}' — ignoring.", productId);
+            return;
+        }
+        if (purchaseAuditLogRepository.existsByTokenHashAndStatus(PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED)) {
+            return; // already credited, by the client or a previous delivery
+        }
+
+        var result = playStoreVerifier.verifyInAppPurchase(productId, purchaseToken);
+        if (!result.valid()) {
+            log.warn("RTDN purchase did not verify with Play — not crediting.");
+            return;
+        }
+        if (result.accountId() == null || result.accountId().isBlank()) {
+            log.warn("RTDN purchase has no obfuscated account id; leaving it for the client to redeem.");
+            return;
+        }
+
+        int credits = PRODUCT_CREDITS.get(productId);
+        accountService.ensure(result.accountId(), null);
+        CreditAccount account = lockAccount(result.accountId());
+        applyDelta(account, credits, CreditReason.PURCHASE, null, "purchase:" + purchaseToken, null);
+        try {
+            saveAudit(result.accountId(), purchaseToken, result.orderId(), productId,
+                    PurchaseStatus.GRANTED, credits, null);
+        } catch (DataIntegrityViolationException dup) {
+            // The client redeemed it concurrently — that grant stands, so undo this one.
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This purchase was already redeemed.");
+        }
+        log.info("Reconciled unredeemed purchase from RTDN: userId={} product={} +{}",
+                result.accountId(), productId, credits);
+    }
+
     /** Claws back a refunded/voided purchase's credits (RTDN). Idempotent; balance may go negative. */
     @Transactional
     public void revokeCreditsForToken(String purchaseToken) {
         if (purchaseToken == null || purchaseToken.isBlank()) return;
-        if (purchaseAuditLogRepository.existsByPurchaseTokenAndStatus(purchaseToken, PurchaseStatus.CREDITS_REVOKED)) {
+        if (purchaseAuditLogRepository.existsByTokenHashAndStatus(PurchaseTokens.hash(purchaseToken), PurchaseStatus.CREDITS_REVOKED)) {
             return; // already handled (RTDN is at-least-once)
         }
-        var grantedOpt = purchaseAuditLogRepository.findFirstByPurchaseTokenAndStatus(
-                purchaseToken, PurchaseStatus.GRANTED);
+        var grantedOpt = purchaseAuditLogRepository.findFirstByTokenHashAndStatus(
+                PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED);
         if (grantedOpt.isEmpty()) return;
 
         var granted = grantedOpt.get();

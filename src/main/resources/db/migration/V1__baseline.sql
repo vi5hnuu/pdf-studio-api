@@ -2,8 +2,8 @@
 --  pdf-studio-api — credit system schema (MySQL)
 --
 --  Identity lives in the standalone auth service; here every row is keyed by the auth
---  userId (JWT subject). JPA `ddl-auto=update` also maintains these; this file is the
---  authoritative definition. Incremental changes go under sql-init/migrations/.
+--  userId (JWT subject). Applied by Flyway; Hibernate only validates against it
+--  (ddl-auto=validate). Later changes go in new V<n>__ files alongside this one.
 --
 --  Tables: credit_accounts, tool_credit_costs, credit_ledger, purchase_audit_log.
 -- ---------------------------------------------------------------------------

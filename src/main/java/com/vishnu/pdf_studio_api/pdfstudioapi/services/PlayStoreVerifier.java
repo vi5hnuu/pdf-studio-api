@@ -40,17 +40,18 @@ public class PlayStoreVerifier {
         final AndroidPublisher api = publisher();
         if (api == null) {
             log.warn("Play verification skipped — no service account key configured.");
-            return new InAppPurchaseResult(false, null);
+            return new InAppPurchaseResult(false, null, null);
         }
         try {
             ProductPurchase purchase = api.purchases().products()
                     .get(packageName, productId, purchaseToken).execute();
             // purchaseState: 0 = purchased, 1 = cancelled, 2 = pending.
             boolean valid = purchase.getPurchaseState() != null && purchase.getPurchaseState() == 0;
-            return new InAppPurchaseResult(valid, purchase.getOrderId());
+            return new InAppPurchaseResult(valid, purchase.getOrderId(),
+                    purchase.getObfuscatedExternalAccountId());
         } catch (Exception e) {
             log.error("Play verification error for product={}: {}", productId, e.getMessage());
-            return new InAppPurchaseResult(false, null);
+            return new InAppPurchaseResult(false, null, null);
         }
     }
 
@@ -77,6 +78,12 @@ public class PlayStoreVerifier {
         }
     }
 
-    /** @param valid whether Google confirmed the purchase; @param orderId Play order id (may be null). */
-    public record InAppPurchaseResult(boolean valid, String orderId) {}
+    /**
+     * @param valid    whether Google confirmed the purchase
+     * @param orderId  Play order id (may be null)
+     * @param accountId the obfuscated external account id the client attached at purchase time —
+     *                  our userId. This is the only way a server-initiated reconciliation (an RTDN
+     *                  for a purchase the client never redeemed) can tell whose account to credit.
+     */
+    public record InAppPurchaseResult(boolean valid, String orderId, String accountId) {}
 }

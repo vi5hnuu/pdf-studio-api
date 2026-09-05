@@ -10,7 +10,7 @@ import java.util.Optional;
 @Repository
 public interface PurchaseAuditLogRepository extends JpaRepository<PurchaseAuditLog, Long> {
 
-    boolean existsByPurchaseTokenAndStatus(String purchaseToken, PurchaseStatus status);
+    boolean existsByTokenHashAndStatus(String tokenHash, PurchaseStatus status);
 
-    Optional<PurchaseAuditLog> findFirstByPurchaseTokenAndStatus(String purchaseToken, PurchaseStatus status);
+    Optional<PurchaseAuditLog> findFirstByTokenHashAndStatus(String tokenHash, PurchaseStatus status);
 }

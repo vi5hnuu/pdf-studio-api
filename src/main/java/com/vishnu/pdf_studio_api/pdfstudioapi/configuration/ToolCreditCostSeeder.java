@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.ApplicationArguments;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -22,6 +23,7 @@ import java.util.List;
  * any row in the DB without a redeploy.
  */
 @Component
+@Order(1) // before ToolCostConsistencyChecker, which verifies what this seeds
 @RequiredArgsConstructor
 @Slf4j
 public class ToolCreditCostSeeder implements ApplicationRunner {
