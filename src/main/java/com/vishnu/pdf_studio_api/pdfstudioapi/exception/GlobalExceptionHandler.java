@@ -7,6 +7,8 @@ import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -60,6 +62,28 @@ public class GlobalExceptionHandler {
             return ResponseEntity.status(status).headers(ex.getHeaders()).body(response.getBody());
         }
         return response;
+    }
+
+    /**
+     * Authorization failures.
+     *
+     * <p>Spring Security's {@code ExceptionTranslationFilter} normally turns these into a 403,
+     * but only if they propagate out of the filter chain. A denial raised by
+     * {@code @PreAuthorize} happens inside the dispatcher, where this advice sees it first —
+     * so without an explicit handler it fell through to the catch-all and every denied
+     * request returned 500 INTERNAL_ERROR instead of 403.
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ApiError> handleAccessDenied(AccessDeniedException ex, HttpServletRequest request) {
+        return build(HttpStatus.FORBIDDEN, "FORBIDDEN",
+                "You do not have permission to perform this action.", ex, request);
+    }
+
+    /** Authentication failures raised past the filter chain, for the same reason as above. */
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ApiError> handleAuthentication(AuthenticationException ex, HttpServletRequest request) {
+        return build(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED",
+                "Authentication is required for this request.", ex, request);
     }
 
     // ── Request-shape problems ────────────────────────────────────────────────────
@@ -125,6 +149,12 @@ public class GlobalExceptionHandler {
         if (cause instanceof ResponseStatusException rse) {
             return handleResponseStatus(rse, request);
         }
+        if (cause instanceof AccessDeniedException denied) {
+            return handleAccessDenied(denied, request);
+        }
+        if (cause instanceof AuthenticationException authFailure) {
+            return handleAuthentication(authFailure, request);
+        }
         if (cause instanceof InvalidPasswordException) {
             ApiException enc = ApiException.encrypted();
             return build(enc.getStatus(), enc.getCode(), enc.getMessage(), ex, request);
@@ -173,6 +203,8 @@ public class GlobalExceptionHandler {
     private boolean isMeaningful(Throwable t) {
         return t instanceof ApiException
                 || t instanceof ResponseStatusException
+                || t instanceof AccessDeniedException
+                || t instanceof AuthenticationException
                 || t instanceof InvalidPasswordException
                 || t instanceof IllegalArgumentException
                 || t instanceof IllegalStateException

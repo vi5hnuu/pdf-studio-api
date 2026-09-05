@@ -2,6 +2,8 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.repository;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.CreditReason;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.CreditLedger;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -17,4 +19,7 @@ public interface CreditLedgerRepository extends JpaRepository<CreditLedger, Long
 
     /** Count of grant events of a reason for a user since an instant (rewarded-ad daily cap). */
     long countByUserIdAndReasonAndCreatedAtAfter(String userId, CreditReason reason, Instant since);
+
+    /** A user's history, newest first. Paged because this table only grows. */
+    Page<CreditLedger> findByUserIdOrderByIdDesc(String userId, Pageable pageable);
 }

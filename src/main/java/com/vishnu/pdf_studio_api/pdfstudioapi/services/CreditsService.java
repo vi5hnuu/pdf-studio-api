@@ -3,6 +3,7 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.CreditProperties;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.CreditReason;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.GrantKind;
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.response.LedgerEntryResponse;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.PurchaseStatus;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.repository.*;
@@ -105,6 +106,28 @@ public class CreditsService {
     public boolean alreadyCharged(String userId, String idempotencyKey) {
         return idempotencyKey != null && !idempotencyKey.isBlank()
                 && ledgerRepository.existsByUserIdAndIdempotencyKey(userId, idempotencyKey);
+    }
+
+    /**
+     * A page of the caller's credit history, newest first.
+     *
+     * <p>"Where did my credits go?" is the first question a credit economy generates, and
+     * until now the ledger existed but nothing exposed it — leaving support to answer from
+     * the database by hand.
+     *
+     * @param page zero-based; {@code size} is clamped so a client cannot request the lot
+     */
+    public LedgerPage listLedger(String userId, int page, int size) {
+        int safeSize = Math.min(Math.max(size, 1), 100);
+        int safePage = Math.max(page, 0);
+        var result = ledgerRepository.findByUserIdOrderByIdDesc(
+                userId, org.springframework.data.domain.PageRequest.of(safePage, safeSize));
+        return new LedgerPage(
+                result.getContent().stream().map(LedgerEntryResponse::from).toList(),
+                safePage,
+                safeSize,
+                result.getTotalElements(),
+                result.hasNext());
     }
 
     // ── Debit (paid tools) ──────────────────────────────────────────────────────
@@ -356,5 +379,9 @@ public class CreditsService {
     }
 
     public record ChargeResult(int balanceRemaining, int charged, boolean alreadyCharged) {}
+
+    /** One page of credit history plus what a client needs to fetch the next. */
+    public record LedgerPage(List<LedgerEntryResponse> entries, int page, int size,
+                             long totalEntries, boolean hasMore) {}
     public record GrantResult(int balance, int granted) {}
 }

@@ -34,6 +34,20 @@ public class CreditsController {
         return ResponseEntity.ok(Map.of("success", true, "data", creditsService.listCosts()));
     }
 
+    /**
+     * The caller's credit history, newest first.
+     *
+     * <p>Scoped to the authenticated user by construction — the userId comes from the token,
+     * never from a parameter, so one user cannot read another's ledger.
+     */
+    @GetMapping("/ledger")
+    public ResponseEntity<Map<String, Object>> ledger(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size) {
+        var result = creditsService.listLedger(CurrentUser.requireId(), page, size);
+        return ResponseEntity.ok(Map.of("success", true, "data", result));
+    }
+
     @PostMapping("/purchase")
     public ResponseEntity<Map<String, Object>> purchase(@RequestBody Map<String, String> body,
                                                         HttpServletRequest request) {
