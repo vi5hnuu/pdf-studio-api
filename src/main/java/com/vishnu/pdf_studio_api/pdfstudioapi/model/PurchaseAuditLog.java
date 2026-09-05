@@ -3,6 +3,8 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.model;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.PurchaseStatus;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.PurchaseTokens;
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import lombok.*;
 
 import java.time.Instant;
@@ -51,6 +53,11 @@ public class PurchaseAuditLog {
     @Column(name = "product_id", length = 100, nullable = false)
     private String productId;
 
+    // Hibernate 6 maps an enum to MySQL's native enum(...) type by default, which the
+    // VARCHAR in the migration does not match — the service then refuses to start under
+    // ddl-auto=validate. VARCHAR is also the better column: adding a value to the enum
+    // does not require an ALTER TABLE.
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 30)
     private PurchaseStatus status;

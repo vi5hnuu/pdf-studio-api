@@ -2,6 +2,8 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.model;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.GrantKind;
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import lombok.*;
 
 import java.time.Instant;
@@ -38,6 +40,11 @@ public class CreditGrantIp {
     @Column(name = "ip_hash", length = 64, nullable = false, updatable = false)
     private String ipHash;
 
+    // Hibernate 6 maps an enum to MySQL's native enum(...) type by default, which the
+    // VARCHAR in the migration does not match — the service then refuses to start under
+    // ddl-auto=validate. VARCHAR is also the better column: adding a value to the enum
+    // does not require an ALTER TABLE.
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Enumerated(EnumType.STRING)
     @Column(name = "grant_kind", length = 16, nullable = false, updatable = false)
     private GrantKind grantKind;

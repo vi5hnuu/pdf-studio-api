@@ -2,6 +2,8 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.model;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.SizeUnit;
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import lombok.*;
 
 /**
@@ -28,6 +30,11 @@ public class ToolCreditCost {
     @Column(name = "base_credits", nullable = false)
     private int baseCredits;
 
+    // Hibernate 6 maps an enum to MySQL's native enum(...) type by default, which the
+    // VARCHAR in the migration does not match — the service then refuses to start under
+    // ddl-auto=validate. VARCHAR is also the better column: adding a value to the enum
+    // does not require an ALTER TABLE.
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Enumerated(EnumType.STRING)
     @Column(name = "size_unit", nullable = false, length = 16)
     @Builder.Default
