@@ -1,6 +1,7 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.configuration;
 
 import lombok.NonNull;
+import org.springframework.http.HttpHeaders;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
@@ -37,6 +38,16 @@ public class CorsConfig implements WebMvcConfigurer {
                 .allowedOrigins(allowedOrigins)
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
                 .allowedHeaders("*")
+                // A browser hands JavaScript only the handful of "simple" response headers
+                // unless they are listed here. The web app and the API are on different
+                // origins, so without this every download fell back to a generic filename
+                // instead of the one the user chose, and the credit headers were unreadable.
+                .exposedHeaders(
+                        HttpHeaders.CONTENT_DISPOSITION,
+                        "X-Credits-Charged",
+                        "X-Credits-Remaining",
+                        "X-Pages-Removed",
+                        HttpHeaders.RETRY_AFTER)
                 .allowCredentials(false)
                 .maxAge(3600);
     }
