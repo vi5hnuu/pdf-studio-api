@@ -18,6 +18,17 @@ class DownloadResponseTest {
     }
 
     @Test
+    @DisplayName("emits a plain quoted filename, not a mail encoded-word")
+    void doesNotUseMailEncoding() {
+        String header = DownloadResponse.header("My Report", "document", "pdf");
+
+        // Spring's charset overload wraps the value as =?UTF-8?Q?...?= (RFC 2047), which is a
+        // mail encoding; clients reading only `filename=` saved that literal string.
+        assertFalse(header.contains("=?"), "must not be a mail encoded-word: " + header);
+        assertTrue(header.contains("filename=\"My Report.pdf\""), header);
+    }
+
+    @Test
     @DisplayName("appends the extension exactly once, even when the name carries one")
     void appendsExtensionOnce() {
         assertTrue(DownloadResponse.header("report.pdf", "document", "pdf").contains("report.pdf"));

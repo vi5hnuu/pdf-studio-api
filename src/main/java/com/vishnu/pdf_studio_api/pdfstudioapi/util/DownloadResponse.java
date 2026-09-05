@@ -7,7 +7,6 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 
-import java.nio.charset.StandardCharsets;
 
 /**
  * Builds every tool's file download response.
@@ -40,7 +39,7 @@ public final class DownloadResponse {
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentDisposition(ContentDisposition.attachment()
-                .filename(filename, StandardCharsets.UTF_8)
+                .filename(filename)
                 .build());
         headers.setContentLength(bytes.length);
         headers.setContentType(contentType);
@@ -59,18 +58,22 @@ public final class DownloadResponse {
      * Builds just the {@code Content-Disposition} header value, for the many call sites that
      * assemble their own {@link HttpHeaders}.
      *
-     * <p>The name is sanitised by {@link FileNames} and then quoted and RFC 5987-encoded by
-     * {@link ContentDisposition}, so a name containing a quote, semicolon or newline can no longer
-     * truncate or split the header.
+     * <p>The name is sanitised by {@link FileNames} — which leaves only ASCII — and then quoted
+     * by {@link ContentDisposition}, so a name containing a quote, semicolon or newline can no
+     * longer truncate or split the header.
      *
      * @param baseName  client-supplied name; sanitised, any extension dropped
      * @param fallback  used when {@code baseName} is absent or sanitises to nothing
      * @param extension without the dot, e.g. {@code "pdf"}
      */
     public static String header(String baseName, String fallback, String extension) {
+        // Deliberately the charset-free overload. Passing UTF-8 makes Spring wrap the plain
+        // `filename=` value as an RFC 2047 encoded-word (=?UTF-8?Q?name?=), which is a mail
+        // header encoding and not valid in HTTP — a client reading only `filename=` saved the
+        // file under that literal string. FileNames.sanitize already restricts the name to
+        // ASCII, so there is nothing for the charset form to encode.
         return ContentDisposition.attachment()
-                .filename(FileNames.safeBaseName(baseName, fallback) + "." + extension,
-                        StandardCharsets.UTF_8)
+                .filename(FileNames.safeBaseName(baseName, fallback) + "." + extension)
                 .build()
                 .toString();
     }
