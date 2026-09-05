@@ -6,6 +6,8 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.enums.GrantKind;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.PurchaseStatus;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.repository.*;
+import com.vishnu.pdf_studio_api.pdfstudioapi.security.PrincipalKey;
+import org.springframework.beans.factory.annotation.Value;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.PurchaseTokens;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,6 +50,13 @@ public class CreditsService {
     private final PlayStoreVerifier playStoreVerifier;
     private final CreditProperties creditProperties;
     private final IpGrantGuard ipGrantGuard;
+
+    /**
+     * Issuer alias for accounts that can make Play purchases. Play's obfuscated account id
+     * carries the bare auth subject, which has to be namespaced the same way tokens are.
+     */
+    @Value("${app.play.account-id-alias:app}")
+    private String playAccountAlias;
 
     // ── Balance & pricing ───────────────────────────────────────────────────────
 
@@ -269,19 +278,22 @@ public class CreditsService {
             return;
         }
 
+        // Play purchases only ever originate in the mobile app, so the raw subject the client
+        // attached is namespaced with that issuer's alias to match how the account is keyed.
+        final String userId = PrincipalKey.of(playAccountAlias, result.accountId());
         int credits = PRODUCT_CREDITS.get(productId);
-        accountService.ensure(result.accountId(), null);
-        CreditAccount account = lockAccount(result.accountId());
+        accountService.ensure(userId, null);
+        CreditAccount account = lockAccount(userId);
         applyDelta(account, credits, CreditReason.PURCHASE, null, "purchase:" + purchaseToken, null);
         try {
-            saveAudit(result.accountId(), purchaseToken, result.orderId(), productId,
+            saveAudit(userId, purchaseToken, result.orderId(), productId,
                     PurchaseStatus.GRANTED, credits, null);
         } catch (DataIntegrityViolationException dup) {
             // The client redeemed it concurrently — that grant stands, so undo this one.
             throw new ResponseStatusException(HttpStatus.CONFLICT, "This purchase was already redeemed.");
         }
         log.info("Reconciled unredeemed purchase from RTDN: userId={} product={} +{}",
-                result.accountId(), productId, credits);
+                userId, productId, credits);
     }
 
     /** Claws back a refunded/voided purchase's credits (RTDN). Idempotent; balance may go negative. */
