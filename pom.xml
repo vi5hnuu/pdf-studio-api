@@ -125,6 +125,12 @@
 			<artifactId>spring-boot-starter-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!-- Mock an authenticated JWT so the full filter/aspect chain can be exercised. -->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-test</artifactId>
+			<scope>test</scope>
+		</dependency>
 		<!-- In-memory DB so the context/credit tests run without a local MySQL. -->
 		<dependency>
 			<groupId>com.h2database</groupId>
