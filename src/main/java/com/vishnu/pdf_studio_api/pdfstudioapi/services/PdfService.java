@@ -4,10 +4,16 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.RedactPdfRequest.Redac
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
+import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.LoadProperties;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.DownloadResponse;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.FileNames;
+import com.vishnu.pdf_studio_api.pdfstudioapi.util.OpenPdf;
+import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfDocuments;
+import com.vishnu.pdf_studio_api.pdfstudioapi.util.TempFiles;
+import com.vishnu.pdf_studio_api.pdfstudioapi.validation.UploadValidator;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.OfficeConvertTools;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -34,7 +40,43 @@ import java.util.zip.ZipOutputStream;
 
 @Service
 @Slf4j
+@RequiredArgsConstructor
 public class PdfService {
+
+    private final LoadProperties loadProperties;
+    private final UploadValidator uploadValidator;
+
+    /**
+     * Opens an upload as a temp-file-backed document.
+     *
+     * <p>Replaces {@code Loader.loadPDF(file.getBytes())}, which pulled the whole upload into the
+     * heap and then let PDFBox hold the parsed document there too. Spring has already spilled the
+     * multipart to disk, so this removes a copy rather than adding I/O, and lets PDFBox spill its
+     * own working data for large documents.
+     *
+     * <p>Also the single place the page-count cap is enforced — it cannot be known before parsing.
+     */
+    private OpenPdf openPdf(MultipartFile file) throws IOException {
+        return openPdf(file, null);
+    }
+
+    private OpenPdf openPdf(MultipartFile file, String password) throws IOException {
+        TempFiles.Handle handle = TempFiles.of(file, ".pdf");
+        try {
+            PDDocument document = PdfDocuments.load(
+                    handle.path(), loadProperties.getScratchFileThresholdBytes(), password);
+            try {
+                uploadValidator.pageCount(document.getNumberOfPages());
+            } catch (RuntimeException tooManyPages) {
+                document.close();
+                throw tooManyPages;
+            }
+            return new OpenPdf(handle, document);
+        } catch (IOException | RuntimeException e) {
+            handle.close();
+            throw e;
+        }
+    }
     public ResponseEntity<Resource> mergePdf(String outFileName,List<MultipartFile> files) {
         if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "images-pdf";
 
@@ -85,7 +127,8 @@ public class PdfService {
 
         if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "split-pdf";
 
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            final PDDocument document = opened.document();
             final byte[] doc = PdfTools.splitPdf(outFileName, type, fixed, ranges, document);
             ByteArrayResource baR = new ByteArrayResource(doc);
 
@@ -134,7 +177,8 @@ public class PdfService {
         if (hPos == null) hPos = Postion.CENTER;
         if (fromPage == null) fromPage = 0;
 
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            final PDDocument document = opened.document();
             final byte[] doc = PdfTools.watermarkPdf(document, text, fontSize, color, opacity, angle, vPos, hPos, fromPage, toPage);
             ByteArrayResource baR = new ByteArrayResource(doc);
 
@@ -152,7 +196,8 @@ public class PdfService {
     public ResponseEntity<Resource> extractText(MultipartFile file, String outFileName) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "extracted-text";
 
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            final PDDocument document = opened.document();
             if (document.isEncrypted()) throw new Exception("document is protected, please remove password first");
 
             String text = PdfTools.extractText(document);
@@ -190,7 +235,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> cropPdf(String outFileName, Float marginTop, Float marginBottom, Float marginLeft, Float marginRight, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "cropped-pdf";
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            final PDDocument document = opened.document();
             final byte[] doc = PdfTools.cropPdf(document, marginTop, marginBottom, marginLeft, marginRight);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
@@ -204,7 +250,8 @@ public class PdfService {
     }
 
     public ResponseEntity<?> getMetadata(MultipartFile file) {
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            final PDDocument document = opened.document();
             return ResponseEntity.ok(PdfTools.getMetadata(document));
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -213,7 +260,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> editMetadata(String outFileName, String title, String author, String subject, String keywords, String creator, String producer, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "edited-pdf";
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            final PDDocument document = opened.document();
             final byte[] doc = PdfTools.editMetadata(document, title, author, subject, keywords, creator, producer);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
@@ -228,7 +276,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> addHeaderFooter(String outFileName, String headerText, String footerText, Integer fontSize, com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel color, org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName fontName, Integer fromPage, Integer toPage, Float topPadding, Float bottomPadding, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "header-footer-pdf";
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            final PDDocument document = opened.document();
             if (toPage == null) toPage = document.getNumberOfPages() - 1;
             final byte[] doc = PdfTools.addHeaderFooter(document, headerText, footerText, fontSize, color, fontName, fromPage, toPage, topPadding, bottomPadding);
             ByteArrayResource baR = new ByteArrayResource(doc);
@@ -259,7 +308,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> flattenPdf(String outFileName, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "flattened-pdf";
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            final PDDocument document = opened.document();
             final byte[] doc = PdfTools.flattenPdf(document);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
@@ -274,7 +324,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> addBlankPages(String outFileName, int[] positions, Float pageWidth, Float pageHeight, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "pdf-with-blanks";
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            final PDDocument document = opened.document();
             final byte[] doc = PdfTools.addBlankPages(document, positions, pageWidth, pageHeight);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
@@ -543,7 +594,8 @@ public class PdfService {
 
     /** Lists a PDF's existing AcroForm fields as JSON. */
     public ResponseEntity<?> getFormFields(MultipartFile file) {
-        try (PDDocument doc = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            PDDocument doc = opened.document();
             return ResponseEntity.ok(PdfTools.getFormFields(doc));
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -595,7 +647,8 @@ public class PdfService {
 
     /** Returns the bookmark tree as JSON — does not produce a file download. */
     public ResponseEntity<?> getBookmarks(MultipartFile file) {
-        try (PDDocument doc = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            PDDocument doc = opened.document();
             return ResponseEntity.ok(PdfTools.getBookmarks(doc));
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -604,7 +657,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> editBookmarks(String outFileName, String bookmarksJson, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "bookmarked-pdf";
-        try (PDDocument doc = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            PDDocument doc = opened.document();
             byte[] result = PdfTools.editBookmarks(doc, bookmarksJson);
             ByteArrayResource baR = new ByteArrayResource(result);
             HttpHeaders headers = new HttpHeaders();
@@ -687,7 +741,8 @@ public class PdfService {
         if (quality == null) quality = Quality.LOW;
         if (imageGap == null) imageGap = 0;
 
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            final PDDocument document = opened.document();
             if (document.isEncrypted()) throw new Exception("document is protected please remove password first");
 
             byte[] imageBytes = PdfTools.pdfToImage(document, single, direction, quality, imageGap);
@@ -735,7 +790,8 @@ public class PdfService {
     public ResponseEntity<Resource> pageNumbers(MultipartFile file, String outFileName, Postion vPos, Postion hPos, Integer fromPage, Integer toPage, PageNoType pageNoType, ColorModel fillColor, Padding padding, Integer size, Standard14Fonts.FontName fontName) {
         outFileName = FileNames.safeBaseName(outFileName, FileNames.stripExtension(file.getOriginalFilename()));
 
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            final PDDocument document = opened.document();
             if (toPage == null) toPage = document.getNumberOfPages() - 1;
             if (document.isEncrypted()) throw new Exception("document is protected please remove password first");
 
@@ -761,7 +817,8 @@ public class PdfService {
     public ResponseEntity<Resource> rotatePdf(String outFileName,Integer fileAngle,Map<Integer,Integer> pageAngles,Boolean maintainRatio,MultipartFile file) {
         if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "rotated_file";
         try(ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-            final PDDocument document = Loader.loadPDF(file.getBytes())){
+            OpenPdf opened = openPdf(file)){
+            final PDDocument document = opened.document();
             final byte[] rotatedPdf = PdfTools.rotatePdf(document,fileAngle,pageAngles,maintainRatio);
 
             ByteArrayResource baR = new ByteArrayResource(rotatedPdf);
@@ -783,7 +840,8 @@ public class PdfService {
 
     public ResponseEntity<Resource> unlockPdf(String outFileName,String password,MultipartFile file) throws InvalidPasswordException {
         outFileName = FileNames.safeBaseName(outFileName, FileNames.stripExtension(file.getOriginalFilename()));
-        try (final PDDocument document = Loader.loadPDF(file.getBytes(),password)) {
+        try (OpenPdf opened = openPdf(file, password)) {
+            final PDDocument document = opened.document();
             if(!document.isEncrypted()) throw new Exception("pdf is already un-protected");
 
             final byte[] protectedDocBytes = PdfTools.unprotectPdf(document);
@@ -809,7 +867,8 @@ public class PdfService {
     public ResponseEntity<Resource> protectPdf(String outFileName, String ownerPassword, String userPassword, Set<UserAccessPermission> userAccessPermissions, MultipartFile file) {
         outFileName = FileNames.safeBaseName(outFileName, FileNames.stripExtension(file.getOriginalFilename()));
 
-        try (final PDDocument document = Loader.loadPDF(file.getBytes())) {
+        try (OpenPdf opened = openPdf(file)) {
+            final PDDocument document = opened.document();
             final byte[] protectedDocBytes = PdfTools.protectPdf(document, ownerPassword, userPassword, userAccessPermissions);
 
             ByteArrayResource baR = new ByteArrayResource(protectedDocBytes);

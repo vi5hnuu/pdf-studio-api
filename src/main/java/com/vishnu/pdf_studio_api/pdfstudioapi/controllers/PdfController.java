@@ -1,6 +1,7 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.controllers;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.annotation.ChargeCredits;
+import com.vishnu.pdf_studio_api.pdfstudioapi.annotation.HeavyTool;
 import com.vishnu.pdf_studio_api.pdfstudioapi.annotation.ValidateUpload;
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.CompressionLevel;
@@ -43,6 +44,7 @@ public class PdfController {
         return pdfService.splitPdf(spr.getOutFileName(),spr.getType(),spr.getFixed(),spr.getRanges(),file);
     }
     @ChargeCredits(tool = "pdf-to-jpg")
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/pdf-to-jpg",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> pdfToJpg(@RequestPart(value = "pdf-to-jpg-info",required = false) PdfToJpgRequest ptjI, @RequestPart("file") MultipartFile multipartFile){
@@ -50,6 +52,7 @@ public class PdfController {
         return pdfService.pdfToJpg(multipartFile,ptjI.getOutFileName(),ptjI.getQuality(),ptjI.getSingle(),ptjI.getDirection(),ptjI.getImageGap());
     }
     @ChargeCredits(tool = "image-to-pdf")
+    @HeavyTool
     @ValidateUpload(ValidateUpload.Kind.IMAGE)
     @PostMapping(value = "/image-to-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> imageToPdf(@RequestPart(value = "image-to-pdf-info",required = false) ImageToPdfRequest itp, @RequestPart("files") List<MultipartFile> files){
@@ -82,6 +85,7 @@ public class PdfController {
     }
 
     @ChargeCredits(tool = "compress-pdf")
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/compress-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> compressPdf(@RequestPart(value = "compress-pdf-info", required = false) CompressPdfRequest cpr, @RequestPart("file") MultipartFile file) {
@@ -105,6 +109,7 @@ public class PdfController {
     }
 
     @ChargeCredits(tool = "grayscale-pdf")
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/grayscale-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> grayscalePdf(@RequestPart(value = "grayscale-pdf-info", required = false) GrayscalePdfRequest gpr, @RequestPart("file") MultipartFile file) {
@@ -142,6 +147,7 @@ public class PdfController {
     }
 
     @ChargeCredits(tool = "repair-pdf")
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/repair-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> repairPdf(@RequestPart(value = "repair-pdf-info", required = false) RepairPdfRequest rpr, @RequestPart("file") MultipartFile file) {
@@ -174,6 +180,7 @@ public class PdfController {
 
     /** Convert PDF to Word (.docx) — text-extraction based, preserves paragraph structure. */
     @ChargeCredits(tool = "pdf-to-word")
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/pdf-to-word", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> pdfToWord(
@@ -185,6 +192,7 @@ public class PdfController {
 
     /** Convert PDF to Excel (.xlsx) — text-extraction based, one sheet per page. */
     @ChargeCredits(tool = "pdf-to-excel")
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/pdf-to-excel", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> pdfToExcel(
@@ -196,6 +204,7 @@ public class PdfController {
 
     /** Convert PDF to PowerPoint (.pptx) — one slide per page with extracted text. */
     @ChargeCredits(tool = "pdf-to-pptx")
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/pdf-to-pptx", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> pdfToPptx(
@@ -223,6 +232,7 @@ public class PdfController {
 
     /** Permanently blacks out rectangular regions on specified pages. */
     @ChargeCredits(tool = "redact-pdf")
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/redact-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> redactPdf(
@@ -258,6 +268,7 @@ public class PdfController {
 
     /** Extracts embedded images from a PDF, returned as a ZIP. */
     @ChargeCredits(tool = "extract-images")
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/extract-images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> extractImages(@RequestPart("file") MultipartFile file) {
@@ -265,6 +276,7 @@ public class PdfController {
     }
 
     /** Returns a JSON analysis report for a PDF. */
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/analyze-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> analyzePdf(@RequestPart("file") MultipartFile file) {
@@ -351,6 +363,7 @@ public class PdfController {
 
     /** Splits a PDF into parts no larger than the requested size, returned as a ZIP. */
     @ChargeCredits(tool = "split-by-size")
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/split-by-size", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> splitBySize(
@@ -405,6 +418,7 @@ public class PdfController {
     }
 
     /** Removes pages whose pixel content is >= threshold fraction near-white (blank pages). */
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/remove-blank-pages", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> removeBlankPages(
@@ -415,6 +429,7 @@ public class PdfController {
 
     /** Removes embedded thumbnails and re-saves to reduce file size. */
     @ChargeCredits(tool = "optimize-pdf")
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/optimize-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> optimizePdf(
@@ -425,6 +440,7 @@ public class PdfController {
 
     /** Tiles nUp (2 or 4) input pages onto each output sheet. */
     @ChargeCredits(tool = "n-up")
+    @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/n-up", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> nUp(

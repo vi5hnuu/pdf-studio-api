@@ -52,7 +52,14 @@ public class GlobalExceptionHandler {
         HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
         if (status == null) status = HttpStatus.INTERNAL_SERVER_ERROR;
         String message = ex.getReason() != null ? ex.getReason() : status.getReasonPhrase();
-        return build(status, codeFor(status), message, ex, request);
+        ResponseEntity<ApiError> response = build(status, codeFor(status), message, ex, request);
+
+        // Preserve headers the thrower attached — notably Retry-After on the load limiter's 503,
+        // which tells a well-behaved client exactly when to come back.
+        if (!ex.getHeaders().isEmpty()) {
+            return ResponseEntity.status(status).headers(ex.getHeaders()).body(response.getBody());
+        }
+        return response;
     }
 
     // ── Request-shape problems ────────────────────────────────────────────────────
