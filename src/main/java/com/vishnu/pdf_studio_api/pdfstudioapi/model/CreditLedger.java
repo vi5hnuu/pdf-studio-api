@@ -27,7 +27,7 @@ public class CreditLedger {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "user_id", length = 40, nullable = false)
+    @Column(name = "user_id", length = 64, nullable = false)
     private String userId;
 
     /** Tool that caused a DEBIT; null for grants. */

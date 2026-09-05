@@ -20,4 +20,14 @@ public class CreditProperties {
     private int rewardedAdGrant = 2;
     /** Max rewarded-ad credits a user can earn per calendar day. */
     private int rewardedAdDailyCap = 10;
+
+    /**
+     * Welcome grants allowed per client IP per day. Guest accounts are free to create on the web,
+     * so without this a user could clear site data repeatedly for unlimited welcome credits. Set
+     * generously enough that a shared office or campus address still works; 0 disables the cap.
+     */
+    private int welcomeGrantsPerIpPerDay = 5;
+
+    /** Daily-allowance claims allowed per client IP per day. 0 disables the cap. */
+    private int dailyGrantsPerIpPerDay = 5;
 }

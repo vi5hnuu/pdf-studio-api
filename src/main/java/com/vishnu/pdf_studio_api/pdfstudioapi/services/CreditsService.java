@@ -2,6 +2,7 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.CreditProperties;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.CreditReason;
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.GrantKind;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.PurchaseStatus;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.repository.*;
@@ -46,6 +47,7 @@ public class CreditsService {
     private final PurchaseAuditLogRepository purchaseAuditLogRepository;
     private final PlayStoreVerifier playStoreVerifier;
     private final CreditProperties creditProperties;
+    private final IpGrantGuard ipGrantGuard;
 
     // ── Balance & pricing ───────────────────────────────────────────────────────
 
@@ -177,6 +179,11 @@ public class CreditsService {
         if (today.equals(account.getLastDailyClaimDate())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Daily credits already claimed today. Come back tomorrow.");
+        }
+        // Also rationed per IP: a per-account daily limit means little when new accounts are free.
+        if (!ipGrantGuard.tryConsume(ip, GrantKind.DAILY)) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    "Too many free claims from your network today. Please try again tomorrow.");
         }
         final int grant = creditProperties.getDailyAllowance();
         account.setLastDailyClaimDate(today);

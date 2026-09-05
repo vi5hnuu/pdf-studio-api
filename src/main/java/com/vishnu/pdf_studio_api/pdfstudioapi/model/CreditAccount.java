@@ -22,9 +22,15 @@ import java.time.LocalDate;
 @Builder
 public class CreditAccount {
 
-    /** Auth userId (JWT sub). */
+    /**
+     * Namespaced auth id: {@code "<issuer alias>:<sub>"}.
+     *
+     * <p>Not the bare JWT subject — the app's and the web's auth deployments have separate
+     * databases and generate ids independently, so two unrelated people can hold the same subject.
+     * See {@link com.vishnu.pdf_studio_api.pdfstudioapi.security.PrincipalKey}.
+     */
     @Id
-    @Column(name = "user_id", length = 40, nullable = false, updatable = false)
+    @Column(name = "user_id", length = 64, nullable = false, updatable = false)
     private String userId;
 
     @Column(name = "balance", nullable = false)

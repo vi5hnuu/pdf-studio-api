@@ -36,7 +36,7 @@ public class PurchaseAuditLog {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "user_id", length = 40, nullable = false)
+    @Column(name = "user_id", length = 64, nullable = false)
     private String userId;
 
     @Column(name = "purchase_token", length = 512, nullable = false)
