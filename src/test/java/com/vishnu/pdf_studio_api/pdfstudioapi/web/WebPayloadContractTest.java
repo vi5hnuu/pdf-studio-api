@@ -64,10 +64,27 @@ class WebPayloadContractTest {
         if (infoPart != null) request = request.file(part(infoPart, json));
         for (MockMultipartFile f : extra) request = request.file(f);
 
-        MvcResult result = mockMvc.perform(request.with(user())).andReturn();
+        MvcResult result = mockMvc.perform(request.with(user()).with(fromUniqueIp())).andReturn();
         assertEquals(200, result.getResponse().getStatus(),
                 path + " rejected the web payload: " + result.getResponse().getContentAsString());
         assertTrue(result.getResponse().getContentAsByteArray().length > 0, path + " returned nothing");
+    }
+
+    /**
+     * Every mock request otherwise arrives from 127.0.0.1, and welcome credits are rationed
+     * per IP per day — so past the fifth test user the account opens with a zero balance and
+     * the tool returns 402. Giving each user its own address keeps the guard's real behaviour
+     * intact (it is covered by IpGrantGuardTest) without it capping the suite.
+     */
+    private static final java.util.concurrent.atomic.AtomicInteger _uniqueIpCounter =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    private static RequestPostProcessor fromUniqueIp() {
+        int n = _uniqueIpCounter.incrementAndGet();
+        return request -> {
+            request.setRemoteAddr("198.51.100." + (n % 250));
+            return request;
+        };
     }
 
     @Test
@@ -138,7 +155,7 @@ class WebPayloadContractTest {
             MvcResult result = mockMvc.perform(multipart("/api/v1/image-studio/" + tool[0])
                     .file(new MockMultipartFile("file", "a.png", "image/png", png))
                     .file(part(tool[1], tool[2]))
-                    .with(user())).andReturn();
+                    .with(user()).with(fromUniqueIp())).andReturn();
             assertEquals(200, result.getResponse().getStatus(),
                     tool[0] + " rejected the web payload: " + result.getResponse().getContentAsString());
         }

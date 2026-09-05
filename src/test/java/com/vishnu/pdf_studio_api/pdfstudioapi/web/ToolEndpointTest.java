@@ -10,6 +10,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.io.ByteArrayOutputStream;
@@ -55,6 +56,23 @@ class ToolEndpointTest {
                 .authorities(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
     }
 
+    /**
+     * Every mock request otherwise arrives from 127.0.0.1, and welcome credits are rationed
+     * per IP per day — so past the fifth test user the account opens with a zero balance and
+     * the tool returns 402. Giving each user its own address keeps the guard's real behaviour
+     * intact (it is covered by IpGrantGuardTest) without it capping the suite.
+     */
+    private static final java.util.concurrent.atomic.AtomicInteger _uniqueIpCounter =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    private static RequestPostProcessor fromUniqueIp() {
+        int n = _uniqueIpCounter.incrementAndGet();
+        return request -> {
+            request.setRemoteAddr("198.51.100." + (n % 250));
+            return request;
+        };
+    }
+
     @Test
     @DisplayName("rejects an unauthenticated call")
     void requiresAuthentication() throws Exception {
@@ -70,7 +88,7 @@ class ToolEndpointTest {
         byte[] zip = {'P', 'K', 0x03, 0x04, 0, 0, 0, 0};
         MvcResult result = mockMvc.perform(multipart("/api/v1/pdf-studio/grayscale-pdf")
                         .file(new MockMultipartFile("file", "payload.pdf", "application/pdf", zip))
-                        .with(asUser("app:u-" + UUID.randomUUID())))
+                        .with(asUser("app:u-" + UUID.randomUUID())).with(fromUniqueIp()))
                 .andReturn();
 
         assertEquals(422, result.getResponse().getStatus());
@@ -89,7 +107,7 @@ class ToolEndpointTest {
         MvcResult first = mockMvc.perform(multipart("/api/v1/pdf-studio/grayscale-pdf")
                         .file(new MockMultipartFile("file", "my report.pdf", "application/pdf", samplePdf()))
                         .header("Idempotency-Key", key)
-                        .with(asUser(userId)))
+                        .with(asUser(userId)).with(fromUniqueIp()))
                 .andReturn();
 
         assertEquals(200, first.getResponse().getStatus());
@@ -108,7 +126,7 @@ class ToolEndpointTest {
         mockMvc.perform(multipart("/api/v1/pdf-studio/grayscale-pdf")
                         .file(new MockMultipartFile("file", "my report.pdf", "application/pdf", samplePdf()))
                         .header("Idempotency-Key", key)
-                        .with(asUser(userId)))
+                        .with(asUser(userId)).with(fromUniqueIp()))
                 .andReturn();
 
         assertEquals(Integer.parseInt(remaining),
@@ -124,7 +142,7 @@ class ToolEndpointTest {
 
         MvcResult result = mockMvc.perform(multipart("/api/v1/pdf-studio/sanitize-pdf")
                         .file(new MockMultipartFile("file", "a.pdf", "application/pdf", samplePdf()))
-                        .with(asUser(userId)))
+                        .with(asUser(userId)).with(fromUniqueIp()))
                 .andReturn();
 
         assertEquals(200, result.getResponse().getStatus());
