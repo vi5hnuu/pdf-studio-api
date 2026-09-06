@@ -852,7 +852,12 @@ public class PdfService {
         outFileName = FileNames.safeBaseName(outFileName, FileNames.stripExtension(file.getOriginalFilename()));
         try (OpenPdf opened = openPdf(file, password)) {
             final PDDocument document = opened.document();
-            if(!document.isEncrypted()) throw new Exception("pdf is already un-protected");
+            // A bare Exception here became a 500. Uploading an unprotected file to the unlock
+            // tool is an ordinary mistake and deserves an answer, not a server error.
+            if (!document.isEncrypted()) {
+                throw ApiException.badRequest("This PDF is not password-protected, so there is "
+                        + "nothing to unlock.");
+            }
 
             final byte[] protectedDocBytes = PdfTools.unprotectPdf(document);
 
@@ -867,7 +872,10 @@ public class PdfService {
                     .status(200)
                     .headers(headers)
                     .body(baR);
-        }catch (InvalidPasswordException e){
+        } catch (InvalidPasswordException e) {
+            // The caller did supply a password; it simply was not the right one.
+            throw ApiException.wrongPassword();
+        } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
             throw new RuntimeException(e);

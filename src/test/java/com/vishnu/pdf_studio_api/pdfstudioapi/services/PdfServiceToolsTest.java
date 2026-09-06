@@ -192,4 +192,53 @@ class PdfServiceToolsTest {
         assertThrows(RuntimeException.class,
                 () -> service.imageToPdf(null, java.util.List.of(notAnImage)));
     }
+
+    // ── Unlocking ─────────────────────────────────────────────────────────────
+
+    @Test
+    void unlockingWithTheWrongPasswordSaysSoRatherThanTellingYouToRemoveThePassword() throws Exception {
+        MultipartFile locked = new MockMultipartFile("file", "locked.pdf", "application/pdf",
+                encryptedPdf("owner-secret", "user-secret"));
+
+        ApiException api = assertThrows(ApiException.class,
+                () -> service.unlockPdf("out", "not-the-password", locked));
+
+        assertEquals("PDF_WRONG_PASSWORD", api.getCode());
+        // "Remove the password first" is circular advice inside the tool that removes it.
+        assertFalse(api.getMessage().contains("Remove the password first"), api.getMessage());
+    }
+
+    @Test
+    void unlockingAFileThatIsNotProtectedIsARequestErrorNotAServerError() {
+        ApiException api = assertThrows(ApiException.class,
+                () -> service.unlockPdf("out", "anything", upload()));
+
+        assertEquals(400, api.getStatus().value());
+    }
+
+    @Test
+    void unlockingWithTheOwnerPasswordReturnsAnUnencryptedFile() throws Exception {
+        MultipartFile locked = new MockMultipartFile("file", "locked.pdf", "application/pdf",
+                encryptedPdf("owner-secret", "user-secret"));
+
+        byte[] unlocked = service.unlockPdf("out", "owner-secret", locked)
+                .getBody().getInputStream().readAllBytes();
+
+        try (PDDocument doc = org.apache.pdfbox.Loader.loadPDF(unlocked)) {
+            assertFalse(doc.isEncrypted());
+        }
+    }
+
+    /** The sample document, encrypted with the given owner and user passwords. */
+    private byte[] encryptedPdf(String owner, String user) throws Exception {
+        try (PDDocument doc = org.apache.pdfbox.Loader.loadPDF(samplePdf);
+             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
+            var policy = new org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy(
+                    owner, user, new org.apache.pdfbox.pdmodel.encryption.AccessPermission());
+            policy.setEncryptionKeyLength(128);
+            doc.protect(policy);
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
 }

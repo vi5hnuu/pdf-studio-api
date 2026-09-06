@@ -42,6 +42,18 @@ public class ApiException extends RuntimeException {
                 "This PDF is password-protected. Remove the password first, then try again.");
     }
 
+    /**
+     * A password was supplied for an encrypted PDF and it did not open the file.
+     *
+     * Distinct from {@link #encrypted()}: telling the user of the unlock tool to "remove the
+     * password first" is circular advice — removing it is exactly what they were doing.
+     */
+    public static ApiException wrongPassword() {
+        return new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "PDF_WRONG_PASSWORD",
+                "That password did not open this PDF. Unlocking needs the owner (master) password "
+                        + "it was protected with, not the one used to open it.");
+    }
+
     /** The request itself is well-formed but asks for something impossible (bad page range, etc.). */
     public static ApiException badRequest(String message) {
         return new ApiException(HttpStatus.BAD_REQUEST, "BAD_REQUEST", message);
