@@ -56,10 +56,16 @@ public class SecurityConfig {
     /** Path of the machine-to-machine Play RTDN webhook. */
     private static final String RTDN_PATH = "/api/v1/credits/play-rtdn";
 
+    /**
+     * Path of AdMob's rewarded server-side verification callback. Google signs the query string
+     * rather than sending a bearer token, so the resource server must not see it either.
+     */
+    private static final String ADMOB_SSV_PATH = "/api/v1/credits/admob-ssv";
+
     private final AuthIssuerProperties authProperties;
 
     /**
-     * Dedicated chain for the RTDN webhook. It deliberately does NOT enable the OAuth2 resource
+     * Dedicated chain for the machine-to-machine webhooks (Play RTDN and AdMob SSV). It deliberately does NOT enable the OAuth2 resource
      * server, so the Pub/Sub OIDC token in the {@code Authorization} header is left untouched (it is
      * Google-signed, not from our auth JWKS, and would otherwise be rejected with 401 before
      * reaching the controller). The controller authenticates it itself (OIDC + shared secret).
@@ -68,7 +74,7 @@ public class SecurityConfig {
     @Order(1)
     public SecurityFilterChain webhookFilterChain(HttpSecurity http) throws Exception {
         return http
-                .securityMatcher(RTDN_PATH)
+                .securityMatcher(RTDN_PATH, ADMOB_SSV_PATH)
                 .cors(Customizer.withDefaults())
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

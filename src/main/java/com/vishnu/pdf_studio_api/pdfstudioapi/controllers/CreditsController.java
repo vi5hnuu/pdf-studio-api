@@ -3,6 +3,7 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.controllers;
 import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
 import com.vishnu.pdf_studio_api.pdfstudioapi.security.CurrentUser;
 import com.vishnu.pdf_studio_api.pdfstudioapi.security.IssuerTokenDecoders;
+import com.vishnu.pdf_studio_api.pdfstudioapi.services.AdMobSsvVerifier;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.CreditsService;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.ClientIp;
 import jakarta.servlet.http.HttpServletRequest;
@@ -10,6 +11,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
@@ -20,10 +23,12 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/credits")
 @RequiredArgsConstructor
+@lombok.extern.slf4j.Slf4j
 public class CreditsController {
 
     private final CreditsService creditsService;
     private final IssuerTokenDecoders issuerTokenDecoders;
+    private final AdMobSsvVerifier ssvVerifier;
 
     @GetMapping("/balance")
     public ResponseEntity<Map<String, Object>> balance(HttpServletRequest request) {
@@ -88,13 +93,59 @@ public class CreditsController {
                 "data", Map.of("credits", balance)));
     }
 
+    /**
+     * Reports the balance after an ad, without granting anything.
+     *
+     * <p>This used to grant on the caller's word: any authenticated request carrying an
+     * idempotency key was credited, so nothing tied a credit to an ad actually playing. The
+     * grant now happens only in {@link #admobCallback}, which Google calls directly and signs.
+     * The endpoint stays so the app can refresh its balance once an ad finishes.
+     */
     @PostMapping("/rewarded")
-    public ResponseEntity<Map<String, Object>> rewarded(
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            HttpServletRequest request) {
-        var result = creditsService.grantRewardedAd(CurrentUser.requireId(), idempotencyKey, ClientIp.of(request));
+    public ResponseEntity<Map<String, Object>> rewarded() {
+        int balance = creditsService.peekBalance(CurrentUser.requireId()).orElse(0);
         return ResponseEntity.ok(Map.of("success", true,
-                "data", Map.of("credits", result.balance(), "granted", result.granted())));
+                "data", Map.of("credits", balance, "granted", 0)));
+    }
+
+    /**
+     * AdMob's server-side verification callback — the only path that grants ad credits.
+     *
+     * <p>Google calls this when a rewarded ad genuinely completes, signing the query string with
+     * one of its rotating keys. The signature is checked before anything is granted, and AdMob's
+     * {@code transaction_id} is used as the idempotency key so a retried or replayed callback
+     * credits once.
+     *
+     * <p>Always answers 200: AdMob retries on any other status, and a forged callback should not
+     * earn a retry. Whether a grant happened is in the log, not the response.
+     */
+    @GetMapping("/admob-ssv")
+    public ResponseEntity<String> admobCallback(HttpServletRequest request) {
+        String query = request.getQueryString();
+
+        if (ssvVerifier.required() && !ssvVerifier.verify(query)) {
+            log.warn("Rejected an AdMob SSV callback that failed verification.");
+            return ResponseEntity.ok("ignored");
+        }
+
+        var params = AdMobSsvVerifier.parse(query == null ? "" : query);
+        String userId = params.get("user_id");
+        String transactionId = params.get("transaction_id");
+        if (userId == null || userId.isBlank() || transactionId == null || transactionId.isBlank()) {
+            log.warn("AdMob SSV callback carried no user_id/transaction_id; nothing to credit.");
+            return ResponseEntity.ok("ignored");
+        }
+
+        try {
+            creditsService.grantRewardedAd(
+                    URLDecoder.decode(userId, StandardCharsets.UTF_8),
+                    transactionId,
+                    ClientIp.of(request));
+        } catch (Exception e) {
+            // A cap being reached is an ordinary outcome, not a reason for AdMob to retry.
+            log.info("AdMob SSV grant not applied for transaction {}: {}", transactionId, e.toString());
+        }
+        return ResponseEntity.ok("ok");
     }
 
     @PostMapping("/daily")
