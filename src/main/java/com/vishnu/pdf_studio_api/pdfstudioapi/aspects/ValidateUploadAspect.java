@@ -43,6 +43,7 @@ public class ValidateUploadAspect {
         Annotation[][] parameterAnnotations = method.getParameterAnnotations();
         Object[] args = joinPoint.getArgs();
         Set<String> imageParts = Set.of(validateUpload.imageParts());
+        Set<String> artworkParts = Set.of(validateUpload.artworkParts());
 
         for (int i = 0; i < args.length; i++) {
             Object arg = args[i];
@@ -54,7 +55,11 @@ public class ValidateUploadAspect {
                     || validateUpload.value() == ValidateUpload.Kind.IMAGE;
 
             if (arg instanceof MultipartFile single) {
-                if (isImage) validator.image(single, partName);
+                // Artwork parts accept either kind. The tool asks again for the answer rather than
+                // the aspect handing it over: classification is a pure function of the leading
+                // bytes, so calling it twice costs a 1KB read and keeps this aspect stateless.
+                if (artworkParts.contains(partName)) validator.pdfOrImage(single, partName);
+                else if (isImage) validator.image(single, partName);
                 else validator.pdf(single, partName);
                 continue;
             }

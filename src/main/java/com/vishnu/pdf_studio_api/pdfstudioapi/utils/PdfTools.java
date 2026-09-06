@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.RedactPdfRequest.RedactRegion;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
+import com.vishnu.pdf_studio_api.pdfstudioapi.model.Placement;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import lombok.extern.slf4j.Slf4j;
 import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
@@ -64,6 +65,8 @@ import javax.imageio.ImageWriter;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.stream.MemoryCacheImageOutputStream;
 import java.awt.*;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import org.apache.pdfbox.io.RandomAccessReadBuffer;
 import java.io.ByteArrayOutputStream;
@@ -801,28 +804,53 @@ public class PdfTools {
         }
     }
 
-    public static byte[] stampPdf(Path sourcePath, Path stampPath, Float opacity, Integer fromPage, Integer toPage) throws IOException {
+    /**
+     * Draws artwork onto a range of pages.
+     *
+     * <p>Two limits used to sit here at once. The artwork had to be a <b>PDF</b>, so a PNG logo or
+     * a scanned signature — the things people actually stamp — could not be used; and it was drawn
+     * with a bare {@code drawForm}, meaning it landed at its own origin at its own size with no way
+     * to say where it should go. An image stamp and a PDF stamp now travel the same placement path.
+     *
+     * @param stampKind  what the artwork is, decided from its bytes during validation
+     * @param placement  where and how big, or {@code null} to draw at natural size at the page
+     *                   origin, which is what callers that send no box have always got
+     */
+    public static byte[] stampPdf(Path sourcePath, Path stampPath, ArtworkKind stampKind,
+                                  Float opacity, Integer fromPage, Integer toPage,
+                                  Placement placement) throws IOException {
+        return stampKind == ArtworkKind.IMAGE
+                ? stampWithImage(sourcePath, Files.readAllBytes(stampPath), opacity, fromPage, toPage, placement)
+                : stampWithPdf(sourcePath, stampPath, opacity, fromPage, toPage, placement);
+    }
+
+    private static byte[] stampWithPdf(Path sourcePath, Path stampPath, Float opacity,
+                                       Integer fromPage, Integer toPage, Placement placement) throws IOException {
         try (PDDocument source = PdfDocuments.load(sourcePath);
              PDDocument stamp = PdfDocuments.load(stampPath);
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
-            if (fromPage == null) fromPage = 0;
-            if (toPage == null) toPage = source.getNumberOfPages() - 1;
-            if (opacity == null) opacity = 1.0f;
+            // Imported once, then referenced by every page in the range, so a 200-page stamp adds
+            // one copy of the artwork to the file rather than two hundred.
+            PDFormXObject stampForm = new LayerUtility(source).importPageAsForm(stamp, 0);
+            PDRectangle bbox = stampForm.getBBox();
 
-            LayerUtility layerUtility = new LayerUtility(source);
-            PDFormXObject stampForm = layerUtility.importPageAsForm(stamp, 0);
-
-            for (int pNo = Math.max(0, fromPage); pNo <= toPage && pNo < source.getNumberOfPages(); pNo++) {
-                PDPage page = source.getPage(pNo);
-                try (PDPageContentStream cs = new PDPageContentStream(source, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
-                    if (opacity < 1.0f) {
-                        PDExtendedGraphicsState gs = new PDExtendedGraphicsState();
-                        gs.setNonStrokingAlphaConstant(opacity);
-                        gs.setAlphaSourceFlag(true);
-                        cs.setGraphicsStateParameters(gs);
+            for (int pageNo : stampRange(source, fromPage, toPage)) {
+                PDPage page = source.getPage(pageNo);
+                try (PDPageContentStream cs = openStampStream(source, page, opacity)) {
+                    if (placement == null) {
+                        cs.drawForm(stampForm);
+                    } else {
+                        Rectangle2D.Float target = resolveOn(page, placement, bbox.getWidth(), bbox.getHeight());
+                        cs.saveGraphicsState();
+                        // A form draws in its own bbox coordinates, so the matrix maps that box
+                        // onto the target rather than mapping the unit square as an image does.
+                        cs.transform(matrixFor(target, placement.rotation(),
+                                bbox.getWidth(), bbox.getHeight(),
+                                bbox.getLowerLeftX(), bbox.getLowerLeftY()));
+                        cs.drawForm(stampForm);
+                        cs.restoreGraphicsState();
                     }
-                    cs.drawForm(stampForm);
                 }
             }
 
@@ -831,36 +859,119 @@ public class PdfTools {
         }
     }
 
+    private static byte[] stampWithImage(Path sourcePath, byte[] imageBytes, Float opacity,
+                                         Integer fromPage, Integer toPage, Placement placement) throws IOException {
+        try (PDDocument source = PdfDocuments.load(sourcePath);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+            PDImageXObject artwork = PDImageXObject.createFromByteArray(source, imageBytes, "stamp");
+
+            for (int pageNo : stampRange(source, fromPage, toPage)) {
+                PDPage page = source.getPage(pageNo);
+                try (PDPageContentStream cs = openStampStream(source, page, opacity)) {
+                    drawArtwork(cs, artwork, page, placement);
+                }
+            }
+
+            source.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    /** The page indices a {@code fromPage}/{@code toPage} pair selects, clamped to the document. */
+    private static List<Integer> stampRange(PDDocument document, Integer fromPage, Integer toPage) {
+        int first = Math.max(0, fromPage == null ? 0 : fromPage);
+        int last = Math.min(document.getNumberOfPages() - 1,
+                toPage == null ? document.getNumberOfPages() - 1 : toPage);
+        List<Integer> pages = new ArrayList<>();
+        for (int i = first; i <= last; i++) pages.add(i);
+        return pages;
+    }
+
+    private static PDPageContentStream openStampStream(PDDocument document, PDPage page, Float opacity) throws IOException {
+        PDPageContentStream cs = new PDPageContentStream(
+                document, page, PDPageContentStream.AppendMode.APPEND, true, true);
+        if (opacity != null && opacity < 1.0f) {
+            PDExtendedGraphicsState gs = new PDExtendedGraphicsState();
+            gs.setNonStrokingAlphaConstant(opacity);
+            gs.setAlphaSourceFlag(true);
+            cs.setGraphicsStateParameters(gs);
+        }
+        return cs;
+    }
+
+    /** Draws an image either into its placement or, with none, filling the page as before. */
+    private static void drawArtwork(PDPageContentStream cs, PDImageXObject artwork,
+                                    PDPage page, Placement placement) throws IOException {
+        if (placement == null) {
+            // No box given: sit the image at its natural size in the page's top-left corner, which
+            // is the closest image equivalent of an unpositioned PDF stamp.
+            PDRectangle mediaBox = page.getMediaBox();
+            cs.drawImage(artwork, mediaBox.getLowerLeftX(),
+                    mediaBox.getUpperRightY() - artwork.getHeight(),
+                    artwork.getWidth(), artwork.getHeight());
+            return;
+        }
+        Rectangle2D.Float target = resolveOn(page, placement, artwork.getWidth(), artwork.getHeight());
+        cs.drawImage(artwork, matrixFor(target, placement.rotation(), 1f, 1f, 0f, 0f));
+    }
+
+    private static Rectangle2D.Float resolveOn(PDPage page, Placement placement,
+                                               float contentWidth, float contentHeight) {
+        PDRectangle mediaBox = page.getMediaBox();
+        return placement.resolve(mediaBox.getWidth(), mediaBox.getHeight(), contentWidth, contentHeight);
+    }
+
     /**
-     * Places an image at an exact position/size on a single PDF page.
-     * x_frac, y_frac: top-left position as fractions of page dimensions (0.0–1.0).
-     * widthFrac, heightFrac: image size as fractions of page dimensions.
-     * PDFBox origin is bottom-left, so y is converted from top-left fraction.
+     * Maps artwork of size {@code sourceWidth} x {@code sourceHeight} (origin at
+     * {@code sourceX},{@code sourceY}) onto {@code target}, rotated about the target's centre.
+     *
+     * <p>Built with {@link AffineTransform} rather than by composing {@link Matrix} products
+     * because its ordering is unambiguous: each call wraps the transform applied before it.
+     */
+    private static Matrix matrixFor(Rectangle2D.Float target, float rotationDegrees,
+                                    float sourceWidth, float sourceHeight,
+                                    float sourceX, float sourceY) {
+        AffineTransform at = new AffineTransform();
+        at.translate(target.x + target.width / 2f, target.y + target.height / 2f);
+        if (rotationDegrees != 0f) at.rotate(Math.toRadians(rotationDegrees));
+        at.translate(-target.width / 2f, -target.height / 2f);
+        at.scale(target.width / sourceWidth, target.height / sourceHeight);
+        at.translate(-sourceX, -sourceY);
+        return new Matrix(at);
+    }
+
+    /**
+     * Places an image on one or more pages.
+     *
+     * <p>Was single-page and unconditionally stretching: the drawn size came straight from the
+     * requested box with no reference to the image's own proportions, so a signature dropped into
+     * a square box came out square. {@link Placement} now decides the geometry, defaulting to
+     * preserving proportions, and the image is embedded once however many pages it appears on.
+     *
+     * @param pages 0-indexed pages to draw on; out-of-range entries are ignored
      */
     public static byte[] placeImage(Path pdfPath, byte[] imageBytes,
-                                    int pageIndex, float xFrac, float yFrac,
-                                    float widthFrac, float heightFrac) throws Exception {
+                                    List<Integer> pages, Placement placement) throws IOException {
         try (PDDocument doc = PdfDocuments.load(pdfPath);
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
-            if (pageIndex < 0 || pageIndex >= doc.getNumberOfPages())
-                throw new IllegalArgumentException("Page index out of range: " + pageIndex);
+            List<Integer> targets = pages == null ? List.of()
+                    : pages.stream().distinct().sorted()
+                    .filter(i -> i >= 0 && i < doc.getNumberOfPages()).toList();
+            if (targets.isEmpty()) {
+                throw ApiException.badRequest("No valid page was selected for the image. "
+                        + "This PDF has " + doc.getNumberOfPages() + " page(s).");
+            }
 
-            PDPage page = doc.getPage(pageIndex);
-            PDRectangle mediaBox = page.getMediaBox();
-            float pageWidth = mediaBox.getWidth();
-            float pageHeight = mediaBox.getHeight();
+            PDImageXObject artwork = PDImageXObject.createFromByteArray(doc, imageBytes, "overlay");
 
-            float x = xFrac * pageWidth;
-            float w = widthFrac * pageWidth;
-            float h = heightFrac * pageHeight;
-            // Convert from top-left to bottom-left coordinate origin used by PDFBox
-            float y = pageHeight - (yFrac * pageHeight) - h;
-
-            PDImageXObject pdImage = PDImageXObject.createFromByteArray(doc, imageBytes, "overlay");
-
-            try (PDPageContentStream cs = new PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
-                cs.drawImage(pdImage, x, y, w, h);
+            for (int pageIndex : targets) {
+                PDPage page = doc.getPage(pageIndex);
+                try (PDPageContentStream cs = new PDPageContentStream(
+                        doc, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                    drawArtwork(cs, artwork, page, placement);
+                }
             }
 
             doc.save(baos, CompressParameters.NO_COMPRESSION);

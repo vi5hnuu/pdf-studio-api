@@ -4,6 +4,7 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.RedactPdfRequest.Redac
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
+import com.vishnu.pdf_studio_api.pdfstudioapi.model.Placement;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.LoadProperties;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.DownloadResponse;
@@ -13,6 +14,7 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfDocuments;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.TempFiles;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.OfficeConvertTools;
+import com.vishnu.pdf_studio_api.pdfstudioapi.validation.UploadValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
@@ -45,6 +47,13 @@ import java.util.zip.ZipOutputStream;
 public class PdfService {
 
     private final LoadProperties loadProperties;
+
+    /**
+     * Also used outside the validation aspect, by tools that need to know <em>which</em> kind of
+     * artwork arrived rather than only that it was acceptable — stamping, which draws a PDF and an
+     * image by different routes.
+     */
+    private final UploadValidator uploadValidator;
 
     /**
      * Opens an upload as a temp-file-backed document.
@@ -344,10 +353,19 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> stampPdf(String outFileName, Float opacity, Integer fromPage, Integer toPage, MultipartFile sourceFile, MultipartFile stampFile) {
+    /**
+     * Stamps a PDF with artwork that may itself be a PDF or an image.
+     *
+     * <p>The stamp's kind is read from its bytes rather than its filename, and decides both the
+     * temp file's extension and how the artwork is drawn.
+     */
+    public ResponseEntity<Resource> stampPdf(String outFileName, Float opacity, Integer fromPage, Integer toPage,
+                                             Placement placement, MultipartFile sourceFile, MultipartFile stampFile) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "stamped-pdf";
-        try (TempFiles.Handle source = TempFiles.of(sourceFile, ".pdf"); TempFiles.Handle stamp = TempFiles.of(stampFile, ".pdf")) {
-            final byte[] doc = PdfTools.stampPdf(source.path(), stamp.path(), opacity, fromPage, toPage);
+        ArtworkKind stampKind = uploadValidator.pdfOrImage(stampFile, "stamp");
+        String stampSuffix = stampKind == ArtworkKind.PDF ? ".pdf" : ".img";
+        try (TempFiles.Handle source = TempFiles.of(sourceFile, ".pdf"); TempFiles.Handle stamp = TempFiles.of(stampFile, stampSuffix)) {
+            final byte[] doc = PdfTools.stampPdf(source.path(), stamp.path(), stampKind, opacity, fromPage, toPage, placement);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
@@ -360,17 +378,15 @@ public class PdfService {
     }
 
     /**
-     * Places an image at a user-defined position and size on a single PDF page.
+     * Places an image at a user-defined position and size on one or more PDF pages.
      * Coordinates are fractions of page dimensions for device independence.
      */
-    public ResponseEntity<Resource> placeImage(String outFileName, int page,
-                                               float xFrac, float yFrac,
-                                               float widthFrac, float heightFrac,
+    public ResponseEntity<Resource> placeImage(String outFileName, List<Integer> pages,
+                                               Placement placement,
                                                MultipartFile pdfFile, MultipartFile imageFile) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "image-placed";
         try (TempFiles.Handle upload = TempFiles.of(pdfFile, ".pdf")) {
-            byte[] result = PdfTools.placeImage(upload.path(), imageFile.getBytes(),
-                    page, xFrac, yFrac, widthFrac, heightFrac);
+            byte[] result = PdfTools.placeImage(upload.path(), imageFile.getBytes(), pages, placement);
             ByteArrayResource baR = new ByteArrayResource(result);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));

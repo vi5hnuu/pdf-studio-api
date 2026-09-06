@@ -19,6 +19,7 @@ import java.lang.annotation.Target;
  *   &#64;ValidateUpload(minFiles = 2)                    // merge: at least two PDFs
  *   &#64;ValidateUpload(ValidateUpload.Kind.IMAGE)       // image-studio: every part is an image
  *   &#64;ValidateUpload(imageParts = "image")            // place-image: "file" is a PDF, "image" is not
+ *   &#64;ValidateUpload(artworkParts = "stamp")          // stamp-pdf: "stamp" may be either
  * </pre>
  */
 @Target(ElementType.METHOD)
@@ -35,6 +36,16 @@ public @interface ValidateUpload {
      * such as {@code place-image} ({@code file} is a PDF, {@code image} is not).
      */
     String[] imageParts() default {};
+
+    /**
+     * Part names that may be <b>either</b> a PDF or an image.
+     *
+     * <p>For artwork the distinction is the caller's choice rather than a constraint: a stamp is
+     * equally validly a one-page PDF or a PNG logo. The tool asks {@link
+     * com.vishnu.pdf_studio_api.pdfstudioapi.validation.UploadValidator#pdfOrImage} which it got
+     * and draws it accordingly.
+     */
+    String[] artworkParts() default {};
 
     /** Minimum number of files a multi-file part must carry. Ignored for single-file parts. */
     int minFiles() default 1;

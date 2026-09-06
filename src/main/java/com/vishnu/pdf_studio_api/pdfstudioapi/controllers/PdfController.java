@@ -170,12 +170,14 @@ public class PdfController {
         return pdfService.addBlankPages(abpr.getOutFileName(), abpr.getPositions(), abpr.getPageWidth(), abpr.getPageHeight(), file);
     }
 
+    /** Stamps artwork — a one-page PDF or an image — over a range of pages. */
     @ChargeCredits(tool = "stamp-pdf")
-    @ValidateUpload
+    @ValidateUpload(artworkParts = "stamp")
     @PostMapping(value = "/stamp-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> stampPdf(@RequestPart(value = "stamp-pdf-info", required = false) StampPdfRequest spr, @RequestPart("file") MultipartFile file, @RequestPart("stamp") MultipartFile stamp) {
         if (spr == null) spr = new StampPdfRequest();
-        return pdfService.stampPdf(spr.getOutFileName(), spr.getOpacity(), spr.getFromPage(), spr.getToPage(), file, stamp);
+        return pdfService.stampPdf(spr.getOutFileName(), spr.getOpacity(), spr.getFromPage(), spr.getToPage(),
+                spr.placement(), file, stamp);
     }
 
     /** Convert PDF to Word (.docx) — text-extraction based, preserves paragraph structure. */
@@ -215,8 +217,9 @@ public class PdfController {
     }
 
     /**
-     * Places an image at a user-defined position and size on a specific PDF page.
+     * Places an image at a user-defined position and size on one or more PDF pages.
      * Coordinates (x_frac, y_frac, width_frac, height_frac) are 0.0–1.0 fractions of page dimensions.
+     * Proportions are preserved unless the caller asks for fit=STRETCH.
      */
     @ChargeCredits(tool = "place-image")
     @ValidateUpload(imageParts = "image")
@@ -225,9 +228,7 @@ public class PdfController {
             @RequestPart(value = "place-image-info") PlaceImageRequest req,
             @RequestPart("file") MultipartFile file,
             @RequestPart("image") MultipartFile image) {
-        return pdfService.placeImage(req.getOutFileName(), req.getPage(),
-                req.getXFrac(), req.getYFrac(), req.getWidthFrac(), req.getHeightFrac(),
-                file, image);
+        return pdfService.placeImage(req.getOutFileName(), req.targetPages(), req.placement(), file, image);
     }
 
     /** Permanently blacks out rectangular regions on specified pages. */

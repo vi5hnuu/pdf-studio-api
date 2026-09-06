@@ -1,6 +1,8 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.LoadProperties;
+import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.UploadProperties;
+import com.vishnu.pdf_studio_api.pdfstudioapi.validation.UploadValidator;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.CompressionLevel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfDocuments;
@@ -37,7 +39,7 @@ class PdfServiceToolsTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        service = new PdfService(new LoadProperties());
+        service = new PdfService(new LoadProperties(), new UploadValidator(new UploadProperties()));
         samplePdf = buildPdf(6);
         originalMaxPages = PdfDocuments.maxPages();
     }
