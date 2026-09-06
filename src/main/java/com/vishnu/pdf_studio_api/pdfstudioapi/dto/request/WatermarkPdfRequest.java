@@ -2,7 +2,7 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.dto.request;
 
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
-import com.vishnu.pdf_studio_api.pdfstudioapi.enums.Postion;
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.Position;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -19,8 +19,8 @@ public class WatermarkPdfRequest {
     private ColorModel color;
     private Float opacity = 0.3f;
     private Double angle = 45.0;
-    private Postion verticalPosition = Postion.CENTER;
-    private Postion horizontalPosition = Postion.CENTER;
+    private Position verticalPosition = Position.CENTER;
+    private Position horizontalPosition = Position.CENTER;
     private Integer fromPage = 0;
     private Integer toPage;
 }

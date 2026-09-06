@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.Padding;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageNoType;
-import com.vishnu.pdf_studio_api.pdfstudioapi.enums.Postion;
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.Position;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
 import jakarta.validation.constraints.NotEmpty;
 import lombok.AllArgsConstructor;

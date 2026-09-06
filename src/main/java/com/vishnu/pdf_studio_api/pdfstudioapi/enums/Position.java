@@ -4,12 +4,12 @@ import lombok.Getter;
 
 
 @Getter
-public enum Postion {
+public enum Position {
     START("START"),
     CENTER("CENTER"),
     END("END");
     final String position;
-    Postion(String position) {
+    Position(String position) {
         this.position=position;
     }
 }
