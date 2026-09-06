@@ -790,12 +790,15 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> imageToPdf(String outFileName, List<MultipartFile> files) {
+    public ResponseEntity<Resource> imageToPdf(String outFileName, ImagePageSize pageSize,
+                                               PageOrientation orientation, Float marginPt,
+                                               List<MultipartFile> files) {
         if (files.isEmpty()) throw new IllegalArgumentException("files cannot be empty");
         if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "images-pdf";
 
         try {
-            final byte[] doc = PdfTools.imagesToPdf(files);
+            final byte[] doc = PdfTools.imagesToPdf(files, pageSize, orientation,
+                    marginPt == null ? 0f : marginPt);
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();

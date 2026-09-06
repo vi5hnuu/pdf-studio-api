@@ -242,7 +242,16 @@ public class PdfTools {
         else return pdfToImagesZip(document, quality);
     }
 
-    public static byte[] imagesToPdf(List<MultipartFile> files) throws Exception {
+    /**
+     * Builds a PDF from images, one image per page.
+     *
+     * <p>Pages used to be sized one point per pixel, which made a phone photo into a page around
+     * 55 by 42 inches and gave a mixed set of images a different page size on every page. A real
+     * page size with the image fitted inside it is what makes the result printable;
+     * {@link ImagePageSize#MATCH_IMAGE} keeps the original behaviour for callers that want it.
+     */
+    public static byte[] imagesToPdf(List<MultipartFile> files, ImagePageSize pageSize,
+                                     PageOrientation orientation, float marginPt) throws Exception {
         // try-with-resources: the document was previously closed only on the success path, so
         // one unreadable image among many leaked the document and its scratch file.
         try (PDDocument document = new PDDocument();
@@ -255,22 +264,59 @@ public class PdfTools {
                     // reading width off it produced an opaque NullPointerException.
                     throw new IOException("Unsupported or corrupt image: " + file.getOriginalFilename());
                 }
-                float width = bimg.getWidth();
-                float height = bimg.getHeight();
+                float imageWidth = bimg.getWidth();
+                float imageHeight = bimg.getHeight();
 
-                PDPage page = new PDPage(new PDRectangle(width, height));
+                PDRectangle pageBox = pageBoxFor(pageSize, orientation, imageWidth, imageHeight);
+                PDPage page = new PDPage(pageBox);
                 document.addPage(page);
 
                 PDImageXObject img = PDImageXObject.createFromByteArray(
                         document, file.getBytes(), file.getOriginalFilename());
+
+                // The content box is the page less the margin; the image is fitted inside it with
+                // its proportions intact, which is the whole point of not using pixels as points.
+                float margin = Math.max(0f, marginPt);
+                float pageWidth = pageBox.getWidth();
+                float pageHeight = pageBox.getHeight();
+                float usableWidth = Math.max(1f, pageWidth - 2 * margin);
+                float usableHeight = Math.max(1f, pageHeight - 2 * margin);
+                Placement placement = new Placement(margin / pageWidth, margin / pageHeight,
+                        usableWidth / pageWidth, usableHeight / pageHeight, 0f, ImageFit.CONTAIN);
+                Rectangle2D.Float target = placement.resolve(pageWidth, pageHeight, imageWidth, imageHeight);
+
                 try (PDPageContentStream contentStream = new PDPageContentStream(document, page)) {
-                    contentStream.drawImage(img, 0, 0);
+                    contentStream.drawImage(img, target.x, target.y, target.width, target.height);
                 }
             }
 
             document.save(byteArrayOutputStream, CompressParameters.NO_COMPRESSION);
             return byteArrayOutputStream.toByteArray();
         }
+    }
+
+    /**
+     * The page an image is placed on.
+     *
+     * <p>Under {@link PageOrientation#AUTO} the page follows the image, so a landscape photo is
+     * not letterboxed into a portrait page with bands of white above and below it.
+     */
+    private static PDRectangle pageBoxFor(ImagePageSize pageSize, PageOrientation orientation,
+                                          float imageWidth, float imageHeight) {
+        if (pageSize == null) pageSize = ImagePageSize.A4;
+        if (pageSize == ImagePageSize.MATCH_IMAGE) {
+            return new PDRectangle(imageWidth, imageHeight);
+        }
+
+        PageSizePreset preset = pageSize.getPreset();
+        boolean landscape = switch (orientation == null ? PageOrientation.AUTO : orientation) {
+            case LANDSCAPE -> true;
+            case PORTRAIT -> false;
+            case AUTO -> imageWidth > imageHeight;
+        };
+        return landscape
+                ? new PDRectangle(preset.getHeight(), preset.getWidth())
+                : new PDRectangle(preset.getWidth(), preset.getHeight());
     }
 
     public static byte[] reorderPdf(Path pdfPath, int[] order) throws Exception {

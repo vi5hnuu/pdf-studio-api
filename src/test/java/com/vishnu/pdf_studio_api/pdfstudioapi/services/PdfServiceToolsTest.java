@@ -192,7 +192,7 @@ class PdfServiceToolsTest {
         var notAnImage = new MockMultipartFile("files", "a.png", "image/png",
                 "this is not an image".getBytes());
         assertThrows(RuntimeException.class,
-                () -> service.imageToPdf(null, java.util.List.of(notAnImage)));
+                () -> service.imageToPdf(null, null, null, null, java.util.List.of(notAnImage)));
     }
 
     // ── Unlocking ─────────────────────────────────────────────────────────────

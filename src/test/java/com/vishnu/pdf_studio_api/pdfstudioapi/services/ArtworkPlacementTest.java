@@ -3,6 +3,8 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.LoadProperties;
 import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.UploadProperties;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.ImageFit;
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.ImagePageSize;
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageOrientation;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.Placement;
 import com.vishnu.pdf_studio_api.pdfstudioapi.validation.UploadValidator;
 import org.apache.pdfbox.Loader;
@@ -198,6 +200,78 @@ class ArtworkPlacementTest {
                 service.stampPdf(null, 1.0f, null, null, null, pdfUpload(), junk));
     }
 
+    // ── Image to PDF ──────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("a large photo becomes a printable A4 page, not a 55-inch one")
+    void imageToPdfProducesARealPageSize() throws Exception {
+        // 4000x3000 is an ordinary phone photo. As points that is a page nearly five feet wide.
+        MultipartFile photo = new MockMultipartFile("files", "photo.png", "image/png", buildPng(4000, 3000));
+
+        byte[] result = bytesOf(service.imageToPdf(null, ImagePageSize.A4, PageOrientation.AUTO, 0f,
+                List.of(photo)));
+
+        try (PDDocument doc = Loader.loadPDF(result)) {
+            var box = doc.getPage(0).getMediaBox();
+            // Landscape photo, AUTO orientation, so A4 turned on its side.
+            assertEquals(842f, box.getWidth(), 0.5f);
+            assertEquals(595f, box.getHeight(), 0.5f);
+        }
+
+        Rectangle2D.Float drawn = DrawnImages.on(result, 0).get(0);
+        assertEquals(4f / 3f, drawn.width / drawn.height, 0.01f, "the photo must not be distorted");
+        // A4 is more elongated than 4:3, so the page's height is what constrains the photo.
+        assertEquals(595f, drawn.height, 0.5f, "it should fill the height it has");
+        assertEquals(793.33f, drawn.width, 0.5f);
+    }
+
+    @Test
+    @DisplayName("mixed images all land on the same page size instead of one size each")
+    void imageToPdfNormalisesPageSize() throws Exception {
+        MultipartFile wide = new MockMultipartFile("files", "wide.png", "image/png", buildPng(1200, 400));
+        MultipartFile tall = new MockMultipartFile("files", "tall.png", "image/png", buildPng(400, 1200));
+
+        byte[] result = bytesOf(service.imageToPdf(null, ImagePageSize.A4, PageOrientation.PORTRAIT, 0f,
+                List.of(wide, tall)));
+
+        try (PDDocument doc = Loader.loadPDF(result)) {
+            assertEquals(2, doc.getNumberOfPages());
+            for (PDPage page : doc.getPages()) {
+                assertEquals(595f, page.getMediaBox().getWidth(), 0.5f);
+                assertEquals(842f, page.getMediaBox().getHeight(), 0.5f);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("MATCH_IMAGE still gives one point per pixel, for callers that relied on it")
+    void imageToPdfCanStillMatchTheImage() throws Exception {
+        MultipartFile photo = new MockMultipartFile("files", "photo.png", "image/png", buildPng(640, 480));
+
+        byte[] result = bytesOf(service.imageToPdf(null, ImagePageSize.MATCH_IMAGE, PageOrientation.AUTO, 0f,
+                List.of(photo)));
+
+        try (PDDocument doc = Loader.loadPDF(result)) {
+            assertEquals(640f, doc.getPage(0).getMediaBox().getWidth(), 0.5f);
+            assertEquals(480f, doc.getPage(0).getMediaBox().getHeight(), 0.5f);
+        }
+    }
+
+    @Test
+    @DisplayName("a margin insets the image without cropping or stretching it")
+    void imageToPdfHonoursAMargin() throws Exception {
+        MultipartFile square = new MockMultipartFile("files", "square.png", "image/png", buildPng(500, 500));
+
+        byte[] result = bytesOf(service.imageToPdf(null, ImagePageSize.A4, PageOrientation.PORTRAIT, 36f,
+                List.of(square)));
+
+        Rectangle2D.Float drawn = DrawnImages.on(result, 0).get(0);
+        // A square in a 523x770 content box fits to the width and is centred.
+        assertEquals(523f, drawn.width, 0.5f);
+        assertEquals(1.0f, drawn.width / drawn.height, 0.01f);
+        assertEquals(36f, drawn.x, 0.5f);
+    }
+
     // ── fixtures ──────────────────────────────────────────────────────────────────
 
     private MultipartFile pdfUpload() {
@@ -237,10 +311,14 @@ class ArtworkPlacementTest {
     }
 
     private static byte[] buildPng() throws IOException {
-        BufferedImage image = new BufferedImage(IMAGE_WIDTH, IMAGE_HEIGHT, BufferedImage.TYPE_INT_ARGB);
+        return buildPng(IMAGE_WIDTH, IMAGE_HEIGHT);
+    }
+
+    private static byte[] buildPng(int width, int height) throws IOException {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = image.createGraphics();
         g.setColor(Color.RED);
-        g.fillRect(0, 0, IMAGE_WIDTH, IMAGE_HEIGHT);
+        g.fillRect(0, 0, width, height);
         g.dispose();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ImageIO.write(image, "png", out);

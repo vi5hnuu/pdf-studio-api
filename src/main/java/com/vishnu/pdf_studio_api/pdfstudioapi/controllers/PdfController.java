@@ -57,7 +57,7 @@ public class PdfController {
     @PostMapping(value = "/image-to-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> imageToPdf(@RequestPart(value = "image-to-pdf-info",required = false) ImageToPdfRequest itp, @RequestPart("files") List<MultipartFile> files){
         if(itp==null) itp=new ImageToPdfRequest();
-        return pdfService.imageToPdf(itp.getOutFileName(),files);
+        return pdfService.imageToPdf(itp.getOutFileName(), itp.getPageSize(), itp.getOrientation(), itp.getMarginPt(), files);
     }
     @ChargeCredits(tool = "page-numbers")
     @ValidateUpload
