@@ -724,14 +724,19 @@ public class PdfTools {
      * <p>The point margins are still honoured when no fractional box is sent, for callers that
      * have not been updated, but they no longer fail quietly.
      *
-     * @param keep  the area to keep as a fraction of each page, in the orientation the page is
-     *              displayed in; {@code null} falls back to the point margins
-     * @param pages 0-indexed pages to crop; empty or absent crops the whole document. Scanned
-     *              documents routinely need a few pages trimmed and the rest left alone, which
-     *              was not expressible while this applied to everything.
+     * @param keep      the area to keep as a fraction of each page, in the orientation the page is
+     *                  displayed in; {@code null} falls back to the point margins
+     * @param overrides crops for individual pages, replacing {@code keep} on the pages they name.
+     *                  A document is usually cropped the same way throughout, so the default
+     *                  covers it and pages the caller never looks at are still cropped; scans are
+     *                  the exception, where one crooked page needs its own treatment.
+     * @param pages     0-indexed pages to crop; empty or absent crops the whole document. Scanned
+     *                  documents routinely need a few pages trimmed and the rest left alone, which
+     *                  was not expressible while this applied to everything.
      */
     public static byte[] cropPdf(PDDocument document, Float marginTop, Float marginBottom,
                                  Float marginLeft, Float marginRight, Placement keep,
+                                 Map<Integer, Placement> overrides,
                                  List<Integer> pages) throws IOException {
         if (marginTop == null) marginTop = 0f;
         if (marginBottom == null) marginBottom = 0f;
@@ -740,12 +745,17 @@ public class PdfTools {
         IntPredicate cropped = pageSelector(pages);
 
         for (int i = 0; i < document.getNumberOfPages(); i++) {
-            if (!cropped.test(i)) continue;
+            // An override names a page explicitly, so it is honoured even when that page falls
+            // outside the general selection: singling a page out is itself the instruction.
+            Placement pageKeep = overrides == null ? null : overrides.get(i);
+            if (pageKeep == null && !cropped.test(i)) continue;
+            if (pageKeep == null) pageKeep = keep;
+
             PDPage page = document.getPage(i);
             PDRectangle mb = page.getMediaBox();
 
-            PDRectangle box = keep != null
-                    ? cropBoxFrom(keep, page, mb)
+            PDRectangle box = pageKeep != null
+                    ? cropBoxFrom(pageKeep, page, mb)
                     : cropBoxFrom(mb, marginTop, marginBottom, marginLeft, marginRight, i);
             page.setCropBox(box);
         }

@@ -9,7 +9,9 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Getter
 @Setter
@@ -50,9 +52,50 @@ public class CropPdfRequest {
      */
     private List<Integer> pages;
 
-    /** The kept area, or {@code null} when the caller sent point margins instead. */
+    /**
+     * Crops for individual pages, overriding {@link #keep()} on the pages they name.
+     *
+     * <p>A document is usually cropped the same way throughout, so the default covers it and
+     * pages the caller never looks at are still cropped. Scans are the exception: one page sits
+     * crooked, or a fold shows on a spread, and only that page needs different treatment.
+     */
+    private List<PageCrop> pageCrops;
+
+    /** The kept area used for any page without an override, or {@code null} for point margins. */
     public Placement keep() {
         // STRETCH: a crop is the exact box asked for, never fitted to something else's shape.
         return Placement.of(keepXFrac, keepYFrac, keepWidthFrac, keepHeightFrac, 0f, ImageFit.STRETCH);
+    }
+
+    /** Per-page overrides, keyed by 0-indexed page. Entries without a complete box are ignored. */
+    public Map<Integer, Placement> overrides() {
+        if (pageCrops == null || pageCrops.isEmpty()) return Map.of();
+        Map<Integer, Placement> byPage = new HashMap<>();
+        for (PageCrop crop : pageCrops) {
+            Placement placement = crop.placement();
+            if (placement != null) byPage.put(crop.getPage(), placement);
+        }
+        return byPage;
+    }
+
+    /** One page's own crop. */
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public static class PageCrop {
+        /** 0-indexed. */
+        private int page;
+
+        @JsonProperty("keep_x_frac")
+        private Float keepXFrac;
+        @JsonProperty("keep_y_frac")
+        private Float keepYFrac;
+        private Float keepWidthFrac;
+        private Float keepHeightFrac;
+
+        public Placement placement() {
+            return Placement.of(keepXFrac, keepYFrac, keepWidthFrac, keepHeightFrac, 0f, ImageFit.STRETCH);
+        }
     }
 }

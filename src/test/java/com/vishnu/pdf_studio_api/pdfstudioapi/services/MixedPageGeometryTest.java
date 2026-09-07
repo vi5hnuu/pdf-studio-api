@@ -22,6 +22,7 @@ import java.awt.geom.Rectangle2D;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -59,7 +60,7 @@ class MixedPageGeometryTest {
 
         // Keep the middle half of each page.
         Placement keep = Placement.of(0.25f, 0.25f, 0.5f, 0.5f, 0f, ImageFit.STRETCH);
-        byte[] result = bytesOf(service.cropPdf(null, null, null, null, null, keep, List.of(), upload));
+        byte[] result = bytesOf(service.cropPdf(null, null, null, null, null, keep, null, List.of(), upload));
 
         try (PDDocument doc = Loader.loadPDF(result)) {
             PDRectangle first = doc.getPage(0).getCropBox();
@@ -80,7 +81,7 @@ class MixedPageGeometryTest {
         // 214pt off each side is wider than the whole of page 2. This used to return a file in
         // which page 1 was cropped and page 2 was untouched, with no indication anything was wrong.
         Exception failure = assertThrows(Exception.class, () ->
-                service.cropPdf(null, 264f, 264f, 214f, 214f, null, List.of(), upload));
+                service.cropPdf(null, 264f, 264f, 214f, 214f, null, null, List.of(), upload));
 
         assertTrue(rootMessage(failure).contains("page 2"),
                 "the error should name the page that could not be cropped: " + rootMessage(failure));
@@ -95,7 +96,7 @@ class MixedPageGeometryTest {
 
         // Keep the left half of what is displayed.
         Placement keep = Placement.of(0f, 0f, 0.5f, 1f, 0f, ImageFit.STRETCH);
-        byte[] result = bytesOf(service.cropPdf(null, null, null, null, null, keep, List.of(), upload));
+        byte[] result = bytesOf(service.cropPdf(null, null, null, null, null, keep, null, List.of(), upload));
 
         try (PDDocument doc = Loader.loadPDF(result)) {
             PDRectangle crop = doc.getPage(0).getCropBox();
@@ -113,12 +114,68 @@ class MixedPageGeometryTest {
     @DisplayName("point margins still work for callers that have not been updated")
     void pointMarginsStillHonoured() throws Exception {
         MultipartFile upload = upload(uniformPages());
-        byte[] result = bytesOf(service.cropPdf(null, 20f, 20f, 20f, 20f, null, List.of(), upload));
+        byte[] result = bytesOf(service.cropPdf(null, 20f, 20f, 20f, 20f, null, null, List.of(), upload));
 
         try (PDDocument doc = Loader.loadPDF(result)) {
             for (PDPage page : doc.getPages()) {
                 assertEquals(572f, page.getCropBox().getWidth(), 0.5f);
             }
+        }
+    }
+
+    @Test
+    @DisplayName("a page with its own crop keeps it; the rest follow the default")
+    void perPageCropOverridesTheDefault() throws Exception {
+        MultipartFile upload = upload(uniformThree());
+
+        Placement everywhere = Placement.of(0.25f, 0.25f, 0.5f, 0.5f, 0f, ImageFit.STRETCH);
+        Placement justPageTwo = Placement.of(0f, 0f, 0.25f, 0.25f, 0f, ImageFit.STRETCH);
+
+        byte[] result = bytesOf(service.cropPdf(null, null, null, null, null,
+                everywhere, Map.of(1, justPageTwo), List.of(), upload));
+
+        try (PDDocument doc = Loader.loadPDF(result)) {
+            assertEquals(306f, doc.getPage(0).getCropBox().getWidth(), 0.5f, "default");
+            assertEquals(153f, doc.getPage(1).getCropBox().getWidth(), 0.5f, "its own crop");
+            assertEquals(306f, doc.getPage(2).getCropBox().getWidth(), 0.5f, "default");
+        }
+    }
+
+    @Test
+    @DisplayName("singling a page out crops it even when the range would have skipped it")
+    void anOverrideIsItselfAnInstruction() throws Exception {
+        MultipartFile upload = upload(uniformThree());
+
+        Placement everywhere = Placement.of(0.25f, 0.25f, 0.5f, 0.5f, 0f, ImageFit.STRETCH);
+        Placement justPageThree = Placement.of(0f, 0f, 0.25f, 0.25f, 0f, ImageFit.STRETCH);
+
+        // The range names pages 1 and 2 only, but page 3 was given a crop of its own.
+        byte[] result = bytesOf(service.cropPdf(null, null, null, null, null,
+                everywhere, Map.of(2, justPageThree), List.of(0, 1), upload));
+
+        try (PDDocument doc = Loader.loadPDF(result)) {
+            assertEquals(306f, doc.getPage(0).getCropBox().getWidth(), 0.5f);
+            assertEquals(306f, doc.getPage(1).getCropBox().getWidth(), 0.5f);
+            assertEquals(153f, doc.getPage(2).getCropBox().getWidth(), 0.5f,
+                    "a page given its own crop should not be silently dropped by the range");
+        }
+    }
+
+    @Test
+    @DisplayName("an override is resolved against its own page, not the previewed one")
+    void perPageCropIsResolvedOnItsOwnPage() throws Exception {
+        // Page 2 is A5. A quarter of it is a quarter of A5, not a quarter of Letter.
+        MultipartFile upload = upload(mixedSizes());
+
+        Placement everywhere = Placement.of(0.25f, 0.25f, 0.5f, 0.5f, 0f, ImageFit.STRETCH);
+        Placement quarter = Placement.of(0f, 0f, 0.25f, 0.25f, 0f, ImageFit.STRETCH);
+
+        byte[] result = bytesOf(service.cropPdf(null, null, null, null, null,
+                everywhere, Map.of(1, quarter), List.of(), upload));
+
+        try (PDDocument doc = Loader.loadPDF(result)) {
+            assertEquals(306f, doc.getPage(0).getCropBox().getWidth(), 0.5f);
+            assertEquals(105f, doc.getPage(1).getCropBox().getWidth(), 1f);  // a quarter of A5's 420
         }
     }
 
@@ -281,6 +338,12 @@ class MixedPageGeometryTest {
         return build(document -> {
             document.addPage(new PDPage(PDRectangle.LETTER));
             document.addPage(new PDPage(PDRectangle.A5));
+        });
+    }
+
+    private static byte[] uniformThree() throws IOException {
+        return build(document -> {
+            for (int i = 0; i < 3; i++) document.addPage(new PDPage(PDRectangle.LETTER));
         });
     }
 
