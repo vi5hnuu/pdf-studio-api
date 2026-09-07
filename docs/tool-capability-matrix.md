@@ -38,8 +38,8 @@ Legend: **Y** yes · **N** no · **n/a** the question does not apply to this too
 | grayscale-pdf | Y (`pages`) | n/a | n/a | n/a | Y | Y |
 | scale-pdf | Y (`pages`) | n/a | n/a | n/a | Y | Y |
 | resize-page | Y (`pages`) | n/a | n/a | n/a | Y | Y |
-| pdf-to-jpg | Y (`pages`) | n/a | n/a | Y | **srv** | **srv** |
-| extract-text | Y (`pages`) | n/a | n/a | n/a | **srv** | **srv** |
+| pdf-to-jpg | Y (`pages`) | n/a | n/a | Y | Y | Y |
+| extract-text | Y (`pages`) | n/a | n/a | n/a | Y | Y |
 | image-to-pdf | n/a | Y | Y (page size) | Y | Y | Y |
 
 Whole-document by nature, no range meaningful: merge, split, split-by-size, reorder, insert,
@@ -69,9 +69,9 @@ tool remembers what it was last set to, and the web has batch processing to matc
 
 ## Remaining client gaps
 
-`pdf-to-jpg` and `extract-text` accept a page range that neither client sends yet — the same
-drift `mirror-pdf` was in when this document was written. Both clients have the control to do it
-(`PageRangeField` on the web, `PageRangeSelector` in the app); only the wiring is missing.
+No capability is now reachable on one client and not the other, and none is server-only. The
+controls that keep it that way are `PageRangeField` on the web and `PageRangeSelector` in the app;
+a new range should reuse them rather than inventing a third.
 
 Present in the app, absent from the web: `sign`, `qr-stamp`, `annotate`, `compare`, `organize`,
 `extract-pages`, `reverse-pages`, `pdf-info`, `fill-form`.
