@@ -9,6 +9,8 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.util.List;
+
 @Getter
 @Setter
 @AllArgsConstructor
@@ -18,7 +20,12 @@ public class PdfToJpgRequest {
     private Quality quality;
     private Boolean single;
     private Direction direction;//if image is single -> join horizontally or vertically
-    private Integer imageGap; // gap if single=true
+    private Integer imageGap;
+    /**
+     * 0-indexed pages to apply this to. Empty or absent applies to the whole document, which is
+     * what this tool always did.
+     */
+    private List<Integer> pages; // gap if single=true
 
     public PdfToJpgRequest(){}
 }

@@ -117,7 +117,7 @@ class PdfServiceToolsTest {
     @Test
     @DisplayName("extract-text recovers the text written into the document")
     void extractTextRoundTrips() throws Exception {
-        ResponseEntity<Resource> response = service.extractText(upload(), null);
+        ResponseEntity<Resource> response = service.extractText(upload(), null, null);
         assertProduced(response);
         String text = new String(response.getBody().getInputStream().readAllBytes());
         assertTrue(text.contains("Page 1 content"), "expected extracted text, got: " + text);

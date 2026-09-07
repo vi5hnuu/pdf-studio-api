@@ -167,10 +167,27 @@ public class PdfTools {
         return baos.toByteArray();
     }
 
-    public static String extractText(PDDocument document) throws IOException {
+    /**
+     * Pulls the text layer out of a document.
+     *
+     * @param pages 0-indexed pages to read; empty or absent reads the whole document. Wanting the
+     *              text of one chapter out of a long report should not mean extracting all of it.
+     */
+    public static String extractText(PDDocument document, List<Integer> pages) throws IOException {
         PDFTextStripper stripper = new PDFTextStripper();
         stripper.setSortByPosition(true);
-        return stripper.getText(document);
+        if (pages == null || pages.isEmpty()) return stripper.getText(document);
+
+        // Read page by page rather than with a start/end range, so a selection need not be
+        // contiguous — "pages 2, 5 and 9" is as valid a request as "pages 2 to 9".
+        StringBuilder text = new StringBuilder();
+        for (int index : pages.stream().distinct().sorted().toList()) {
+            if (index < 0 || index >= document.getNumberOfPages()) continue;
+            stripper.setStartPage(index + 1);
+            stripper.setEndPage(index + 1);
+            text.append(stripper.getText(document));
+        }
+        return text.toString();
     }
 
     /**
@@ -256,9 +273,17 @@ public class PdfTools {
         }
     }
 
-    public static byte[] pdfToImage(PDDocument document, Boolean singleImage, Direction direction, Quality quality, Integer imageGap) throws IOException {
-        if (singleImage) return pdfToSingleImage(document, direction, quality, imageGap);
-        else return pdfToImagesZip(document, quality);
+    /**
+     * Renders pages to JPEG, as one combined image or a zip of one file per page.
+     *
+     * @param pages 0-indexed pages to render; empty or absent renders the whole document.
+     *              Rendering is the costliest thing this service does, so converting a 200-page
+     *              report to get one page was expensive for the user as well as the server.
+     */
+    public static byte[] pdfToImage(PDDocument document, Boolean singleImage, Direction direction,
+                                    Quality quality, Integer imageGap, List<Integer> pages) throws IOException {
+        if (singleImage) return pdfToSingleImage(document, direction, quality, imageGap, pages);
+        else return pdfToImagesZip(document, quality, pages);
     }
 
     /**
@@ -357,7 +382,8 @@ public class PdfTools {
         }
     }
 
-    public static byte[] pdfToSingleImage(PDDocument document, Direction direction, Quality quality, Integer imageGap) throws IOException {
+    public static byte[] pdfToSingleImage(PDDocument document, Direction direction, Quality quality,
+                                          Integer imageGap, List<Integer> pages) throws IOException {
         if (document == null) throw new IllegalArgumentException("pdf document is required");
 
         if (direction == null) direction = Direction.VERTICAL;
@@ -368,7 +394,9 @@ public class PdfTools {
 
         // Combine all pages into a single image
         BufferedImage combinedImage = null;
+        IntPredicate wanted = pageSelector(pages);
         for (int pageIndex = 0; pageIndex < document.getNumberOfPages(); pageIndex++) {
+            if (!wanted.test(pageIndex)) continue;
             BufferedImage pageImage = pdfRenderer.renderImageWithDPI(pageIndex, quality.getDpi(), ImageType.RGB);
             if (combinedImage == null) combinedImage = pageImage;
             else
@@ -381,7 +409,7 @@ public class PdfTools {
         return bytes;
     }
 
-    public static byte[] pdfToImagesZip(PDDocument document, Quality quality) throws IOException {
+    public static byte[] pdfToImagesZip(PDDocument document, Quality quality, List<Integer> pages) throws IOException {
         if (document == null) throw new IllegalArgumentException("pdf document is required");
         if (quality == null) quality = Quality.LOW;
 
@@ -389,8 +417,10 @@ public class PdfTools {
              ZipOutputStream zip = new ZipOutputStream(zipOutputStream);
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             PDFRenderer pdfRenderer = new PDFRenderer(document);
+            IntPredicate wanted = pageSelector(pages);
 
             for (int pageIndex = 0; pageIndex < document.getNumberOfPages(); pageIndex++) {
+                if (!wanted.test(pageIndex)) continue;
                 baos.reset();
                 BufferedImage pageImage = pdfRenderer.renderImageWithDPI(pageIndex, quality.getDpi(), ImageType.RGB);
                 ImageIO.write(pageImage, "JPG", baos);

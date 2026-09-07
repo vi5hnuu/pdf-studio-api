@@ -201,14 +201,14 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> extractText(MultipartFile file, String outFileName) {
+    public ResponseEntity<Resource> extractText(MultipartFile file, String outFileName, List<Integer> pages) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "extracted-text";
 
         try (OpenPdf opened = openPdf(file)) {
             final PDDocument document = opened.document();
             if (document.isEncrypted()) throw new Exception("document is protected, please remove password first");
 
-            String text = PdfTools.extractText(document);
+            String text = PdfTools.extractText(document, pages);
             if (text.isBlank()) {
                 // A scanned PDF is images with no text layer. Returning an empty file with a
                 // 200 left the user to guess; this names the actual reason.
@@ -758,7 +758,7 @@ public class PdfService {
         return ResponseEntity.status(200).body(null);
     }
 
-    public ResponseEntity<Resource> pdfToJpg(MultipartFile file, String outFileName, Quality quality, Boolean single, Direction direction, Integer imageGap) {
+    public ResponseEntity<Resource> pdfToJpg(MultipartFile file, String outFileName, Quality quality, Boolean single, Direction direction, Integer imageGap, List<Integer> pages) {
         if (file == null) throw new IllegalArgumentException("pdf document is required");
 
         if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = file.getOriginalFilename();
@@ -771,7 +771,7 @@ public class PdfService {
             final PDDocument document = opened.document();
             if (document.isEncrypted()) throw new Exception("document is protected please remove password first");
 
-            byte[] imageBytes = PdfTools.pdfToImage(document, single, direction, quality, imageGap);
+            byte[] imageBytes = PdfTools.pdfToImage(document, single, direction, quality, imageGap, pages);
 
             ByteArrayResource baR = new ByteArrayResource(imageBytes);
 

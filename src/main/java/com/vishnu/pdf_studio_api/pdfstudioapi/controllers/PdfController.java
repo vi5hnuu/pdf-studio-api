@@ -49,7 +49,7 @@ public class PdfController {
     @PostMapping(value = "/pdf-to-jpg",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> pdfToJpg(@RequestPart(value = "pdf-to-jpg-info",required = false) PdfToJpgRequest ptjI, @RequestPart("file") MultipartFile multipartFile){
         if(ptjI==null) ptjI=new PdfToJpgRequest();
-        return pdfService.pdfToJpg(multipartFile,ptjI.getOutFileName(),ptjI.getQuality(),ptjI.getSingle(),ptjI.getDirection(),ptjI.getImageGap());
+        return pdfService.pdfToJpg(multipartFile,ptjI.getOutFileName(),ptjI.getQuality(),ptjI.getSingle(),ptjI.getDirection(),ptjI.getImageGap(),ptjI.getPages());
     }
     @ChargeCredits(tool = "image-to-pdf")
     @HeavyTool
@@ -104,8 +104,8 @@ public class PdfController {
     @ValidateUpload
     @PostMapping(value = "/extract-text", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> extractText(@RequestPart(value = "extract-text-info", required = false) ExtractTextRequest etr, @RequestPart("file") MultipartFile file) {
-        String outFileName = etr != null ? etr.getOutFileName() : null;
-        return pdfService.extractText(file, outFileName);
+        if (etr == null) etr = new ExtractTextRequest();
+        return pdfService.extractText(file, etr.getOutFileName(), etr.getPages());
     }
 
     @ChargeCredits(tool = "grayscale-pdf")

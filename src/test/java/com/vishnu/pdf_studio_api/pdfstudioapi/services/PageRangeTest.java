@@ -136,6 +136,33 @@ class PageRangeTest {
         }
     }
 
+    @Test
+    @DisplayName("pdf-to-jpg renders only the requested pages, not all 4")
+    void pdfToJpgRendersSelectedPagesOnly() throws Exception {
+        byte[] zip = bytesOf(service.pdfToJpg(upload(), null, null, false, null, null, List.of(1, 3)));
+
+        List<String> entries = new java.util.ArrayList<>();
+        try (java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream(
+                new java.io.ByteArrayInputStream(zip))) {
+            for (java.util.zip.ZipEntry entry; (entry = in.getNextEntry()) != null; ) {
+                entries.add(entry.getName());
+            }
+        }
+        assertEquals(List.of("page_2.jpg", "page_4.jpg"), entries,
+                "entries keep their original page numbers so the user can tell which is which");
+    }
+
+    @Test
+    @DisplayName("extract-text reads only the requested pages, including non-contiguous ones")
+    void extractTextReadsSelectedPagesOnly() throws Exception {
+        String text = new String(bytesOf(service.extractText(upload(), null, List.of(0, 2))));
+
+        assertTrue(text.contains("Page 1"));
+        assertFalse(text.contains("Page 2"), "page 2 was not selected");
+        assertTrue(text.contains("Page 3"));
+        assertFalse(text.contains("Page 4"), "page 4 was not selected");
+    }
+
     // ── fixtures ──────────────────────────────────────────────────────────────────
 
     private MultipartFile upload() {
