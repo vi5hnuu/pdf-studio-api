@@ -18,6 +18,7 @@ import java.awt.geom.Rectangle2D;
  * the geometry in one place is what keeps them consistent.
  */
 public record Placement(float xFrac, float yFrac, float widthFrac, float heightFrac,
+                        /** Clockwise degrees about the centre of the placement. */
                         float rotation, ImageFit fit) {
 
     public Placement {
@@ -37,6 +38,59 @@ public record Placement(float xFrac, float yFrac, float widthFrac, float heightF
         if (widthFrac <= 0 || heightFrac <= 0) return null;
         return new Placement(xFrac, yFrac, widthFrac, heightFrac,
                 rotation == null ? 0f : rotation, fit);
+    }
+
+    /**
+     * This box narrowed to the artwork's own proportions, still expressed in display fractions.
+     *
+     * <p>Separating the fit from the final resolve is what lets a rotated page be handled: the
+     * artwork has to be fitted against the page <em>as the user saw it</em>, and only then mapped
+     * back into the page's stored coordinates. Doing both at once would fit against the wrong
+     * pair of dimensions on a page turned on its side.
+     */
+    public Placement fitted(float pageWidth, float pageHeight, float contentWidth, float contentHeight) {
+        if (fit != ImageFit.CONTAIN || contentWidth <= 0 || contentHeight <= 0 || pageWidth <= 0 || pageHeight <= 0) {
+            return this;
+        }
+        float boxWidth = widthFrac * pageWidth;
+        float boxHeight = heightFrac * pageHeight;
+        float scale = Math.min(boxWidth / contentWidth, boxHeight / contentHeight);
+        float drawWidth = contentWidth * scale;
+        float drawHeight = contentHeight * scale;
+
+        return new Placement(
+                xFrac + (boxWidth - drawWidth) / 2f / pageWidth,
+                yFrac + (boxHeight - drawHeight) / 2f / pageHeight,
+                drawWidth / pageWidth,
+                drawHeight / pageHeight,
+                rotation,
+                // Already the artwork's own shape, so the resolve must not fit it a second time.
+                ImageFit.STRETCH);
+    }
+
+    /**
+     * Re-expresses this box, drawn on the page <em>as displayed</em>, in the page's own
+     * unrotated coordinates.
+     *
+     * <p>A page carrying {@code /Rotate 90} is shown turned on its side, so a box the user drew
+     * over the top-left of what they saw is not the top-left of the page as stored. Every client
+     * previews the rotated page — that is the whole point of a preview — so fractions arrive in
+     * display space and have to be turned back before they mean anything to PDFBox.
+     *
+     * @param pageRotation the page's {@code /Rotate}, in degrees; anything not a multiple of 90
+     *                     is treated as no rotation, which is what PDFBox does with it
+     */
+    public Placement forPageRotation(int pageRotation) {
+        int turns = Math.floorMod(pageRotation / 90, 4);
+        if (pageRotation % 90 != 0 || turns == 0) return this;
+
+        return switch (turns) {
+            // Display (u,v) relates to page-space (a,b) by u = 1-b, v = a.
+            case 1 -> new Placement(yFrac, 1 - xFrac - widthFrac, heightFrac, widthFrac, rotation, fit);
+            case 2 -> new Placement(1 - xFrac - widthFrac, 1 - yFrac - heightFrac, widthFrac, heightFrac, rotation, fit);
+            // u = b, v = 1-a.
+            default -> new Placement(1 - yFrac - heightFrac, xFrac, heightFrac, widthFrac, rotation, fit);
+        };
     }
 
     /**

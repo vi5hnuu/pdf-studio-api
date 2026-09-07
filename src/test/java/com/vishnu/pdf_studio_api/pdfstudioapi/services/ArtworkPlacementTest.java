@@ -349,6 +349,11 @@ class ArtworkPlacementTest {
      * therefore the only way to assert that an image came out undistorted — checking the embedded
      * image's own pixel dimensions would pass even when the page draws it as a square.
      */
+    /** Shared with {@link MixedPageGeometryTest}, which asks the same question of rotated pages. */
+    static List<Rectangle2D.Float> drawnImagesOn(byte[] pdf, int pageIndex) throws IOException {
+        return DrawnImages.on(pdf, pageIndex);
+    }
+
     private static final class DrawnImages extends PDFGraphicsStreamEngine {
 
         private final List<Rectangle2D.Float> boxes = new ArrayList<>();
@@ -368,11 +373,22 @@ class ArtworkPlacementTest {
 
         @Override
         public void drawImage(PDImage pdImage) {
-            // An image is drawn into the unit square, so the CTM's scale factors are its size on
-            // the page and its translation is the bottom-left corner.
+            // An image is drawn into the unit square, so the CTM maps that square onto the page.
+            // The four corners are transformed and bounded rather than reading the translation
+            // and scale off the matrix: those only describe the drawn rectangle while the matrix
+            // has no rotation in it, and would report a rotated placement as sitting at whichever
+            // corner the origin happened to land on.
             Matrix ctm = getGraphicsState().getCurrentTransformationMatrix();
-            boxes.add(new Rectangle2D.Float(ctm.getTranslateX(), ctm.getTranslateY(),
-                    ctm.getScalingFactorX(), ctm.getScalingFactorY()));
+            float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
+            float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+            for (float[] corner : new float[][] {{0, 0}, {1, 0}, {1, 1}, {0, 1}}) {
+                Point2D transformed = ctm.transformPoint(corner[0], corner[1]);
+                minX = Math.min(minX, (float) transformed.getX());
+                maxX = Math.max(maxX, (float) transformed.getX());
+                minY = Math.min(minY, (float) transformed.getY());
+                maxY = Math.max(maxY, (float) transformed.getY());
+            }
+            boxes.add(new Rectangle2D.Float(minX, minY, maxX - minX, maxY - minY));
         }
 
         // Nothing else about the page is of interest here.

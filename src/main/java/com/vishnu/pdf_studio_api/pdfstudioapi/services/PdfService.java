@@ -248,11 +248,11 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> cropPdf(String outFileName, Float marginTop, Float marginBottom, Float marginLeft, Float marginRight, List<Integer> pages, MultipartFile file) {
+    public ResponseEntity<Resource> cropPdf(String outFileName, Float marginTop, Float marginBottom, Float marginLeft, Float marginRight, Placement keep, List<Integer> pages, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "cropped-pdf";
         try (OpenPdf opened = openPdf(file)) {
             final PDDocument document = opened.document();
-            final byte[] doc = PdfTools.cropPdf(document, marginTop, marginBottom, marginLeft, marginRight, pages);
+            final byte[] doc = PdfTools.cropPdf(document, marginTop, marginBottom, marginLeft, marginRight, keep, pages);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));

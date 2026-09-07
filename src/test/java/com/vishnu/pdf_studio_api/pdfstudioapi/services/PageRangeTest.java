@@ -48,7 +48,7 @@ class PageRangeTest {
     @Test
     @DisplayName("crop trims only the selected pages and leaves the rest at full size")
     void cropAppliesToSelectedPagesOnly() throws Exception {
-        byte[] result = bytesOf(service.cropPdf(null, 20f, 20f, 20f, 20f, List.of(1, 2), upload()));
+        byte[] result = bytesOf(service.cropPdf(null, 20f, 20f, 20f, 20f, null, List.of(1, 2), upload()));
 
         try (PDDocument doc = Loader.loadPDF(result)) {
             assertEquals(612f, doc.getPage(0).getCropBox().getWidth(), 0.5f, "page 1 was not selected");
@@ -61,7 +61,7 @@ class PageRangeTest {
     @Test
     @DisplayName("an empty selection still crops the whole document, as it always did")
     void emptySelectionMeansEveryPage() throws Exception {
-        byte[] result = bytesOf(service.cropPdf(null, 20f, 20f, 20f, 20f, List.of(), upload()));
+        byte[] result = bytesOf(service.cropPdf(null, 20f, 20f, 20f, 20f, null, List.of(), upload()));
 
         try (PDDocument doc = Loader.loadPDF(result)) {
             for (PDPage page : doc.getPages()) {

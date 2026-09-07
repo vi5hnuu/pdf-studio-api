@@ -714,12 +714,25 @@ public class PdfTools {
     /**
      * Trims the visible area of some or all pages.
      *
+     * <p>The area to keep should be given as {@code keep} — a fraction of each page — rather than
+     * as point margins. Margins in points are necessarily measured against <em>one</em> page, and
+     * a document whose pages are not all the same size then gets a crop that is wrong everywhere
+     * else: too little, too much, or, where the margins exceed the page altogether, none at all.
+     * That last case used to pass silently, so a mixed document came back looking cropped on page
+     * one and untouched after it.
+     *
+     * <p>The point margins are still honoured when no fractional box is sent, for callers that
+     * have not been updated, but they no longer fail quietly.
+     *
+     * @param keep  the area to keep as a fraction of each page, in the orientation the page is
+     *              displayed in; {@code null} falls back to the point margins
      * @param pages 0-indexed pages to crop; empty or absent crops the whole document. Scanned
      *              documents routinely need a few pages trimmed and the rest left alone, which
      *              was not expressible while this applied to everything.
      */
     public static byte[] cropPdf(PDDocument document, Float marginTop, Float marginBottom,
-                                 Float marginLeft, Float marginRight, List<Integer> pages) throws IOException {
+                                 Float marginLeft, Float marginRight, Placement keep,
+                                 List<Integer> pages) throws IOException {
         if (marginTop == null) marginTop = 0f;
         if (marginBottom == null) marginBottom = 0f;
         if (marginLeft == null) marginLeft = 0f;
@@ -730,18 +743,48 @@ public class PdfTools {
             if (!cropped.test(i)) continue;
             PDPage page = document.getPage(i);
             PDRectangle mb = page.getMediaBox();
-            float llx = mb.getLowerLeftX() + marginLeft;
-            float lly = mb.getLowerLeftY() + marginBottom;
-            float width = mb.getWidth() - marginLeft - marginRight;
-            float height = mb.getHeight() - marginTop - marginBottom;
-            if (width > 0 && height > 0) {
-                page.setCropBox(new PDRectangle(llx, lly, width, height));
-            }
+
+            PDRectangle box = keep != null
+                    ? cropBoxFrom(keep, page, mb)
+                    : cropBoxFrom(mb, marginTop, marginBottom, marginLeft, marginRight, i);
+            page.setCropBox(box);
         }
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         document.save(baos, CompressParameters.NO_COMPRESSION);
         return baos.toByteArray();
+    }
+
+    /**
+     * The kept area of one page, from a fraction of that same page.
+     *
+     * <p>Because the box is a fraction of the page it is being applied to, it cannot fall outside
+     * it however the page is sized or turned — which is exactly what point margins could not
+     * promise.
+     */
+    private static PDRectangle cropBoxFrom(Placement keep, PDPage page, PDRectangle mediaBox) {
+        Rectangle2D.Float rect = keep
+                .forPageRotation(page.getRotation())
+                .resolve(mediaBox.getWidth(), mediaBox.getHeight(), 0, 0);
+        return new PDRectangle(
+                mediaBox.getLowerLeftX() + rect.x,
+                mediaBox.getLowerLeftY() + rect.y,
+                rect.width, rect.height);
+    }
+
+    /** The kept area of one page from point margins, rejecting margins the page cannot meet. */
+    private static PDRectangle cropBoxFrom(PDRectangle mediaBox, float top, float bottom,
+                                           float left, float right, int pageIndex) {
+        float width = mediaBox.getWidth() - left - right;
+        float height = mediaBox.getHeight() - top - bottom;
+        if (width <= 0 || height <= 0) {
+            throw ApiException.badRequest("The crop margins are larger than page "
+                    + (pageIndex + 1) + ", which is " + Math.round(mediaBox.getWidth()) + " by "
+                    + Math.round(mediaBox.getHeight()) + " points. This document's pages are not "
+                    + "all the same size, so choose the area to keep as a proportion of the page.");
+        }
+        return new PDRectangle(mediaBox.getLowerLeftX() + left, mediaBox.getLowerLeftY() + bottom,
+                width, height);
     }
 
     public static Map<String, String> getMetadata(PDDocument document) {
@@ -950,7 +993,7 @@ public class PdfTools {
                         cs.saveGraphicsState();
                         // A form draws in its own bbox coordinates, so the matrix maps that box
                         // onto the target rather than mapping the unit square as an image does.
-                        cs.transform(matrixFor(target, placement.rotation(),
+                        cs.transform(matrixFor(target, artworkRotation(page, placement),
                                 bbox.getWidth(), bbox.getHeight(),
                                 bbox.getLowerLeftX(), bbox.getLowerLeftY()));
                         cs.drawForm(stampForm);
@@ -1018,13 +1061,40 @@ public class PdfTools {
             return;
         }
         Rectangle2D.Float target = resolveOn(page, placement, artwork.getWidth(), artwork.getHeight());
-        cs.drawImage(artwork, matrixFor(target, placement.rotation(), 1f, 1f, 0f, 0f));
+        cs.drawImage(artwork, matrixFor(target, artworkRotation(page, placement), 1f, 1f, 0f, 0f));
     }
 
+    /**
+     * Where artwork lands on a page, honouring how that page is turned.
+     *
+     * <p>The caller drew the box on the page as displayed. A page carrying {@code /Rotate 90} is
+     * shown on its side, so the box has to be fitted against the displayed dimensions and only
+     * then mapped back into the page's stored ones — fitting against the stored pair would use
+     * the wrong shape, and placing without the mapping would put the artwork somewhere else
+     * entirely.
+     */
     private static Rectangle2D.Float resolveOn(PDPage page, Placement placement,
                                                float contentWidth, float contentHeight) {
         PDRectangle mediaBox = page.getMediaBox();
-        return placement.resolve(mediaBox.getWidth(), mediaBox.getHeight(), contentWidth, contentHeight);
+        boolean quarterTurned = Math.floorMod(page.getRotation() / 90, 2) == 1
+                && page.getRotation() % 90 == 0;
+        float displayWidth = quarterTurned ? mediaBox.getHeight() : mediaBox.getWidth();
+        float displayHeight = quarterTurned ? mediaBox.getWidth() : mediaBox.getHeight();
+
+        return placement
+                .fitted(displayWidth, displayHeight, contentWidth, contentHeight)
+                .forPageRotation(page.getRotation())
+                .resolve(mediaBox.getWidth(), mediaBox.getHeight(), contentWidth, contentHeight);
+    }
+
+    /**
+     * How far the artwork itself must be turned to sit upright on a rotated page.
+     *
+     * <p>The page's own rotation is undone, so a signature dropped on a sideways page reads the
+     * same way the page does rather than lying across it.
+     */
+    private static float artworkRotation(PDPage page, Placement placement) {
+        return placement.rotation() - page.getRotation();
     }
 
     /**
@@ -1037,11 +1107,22 @@ public class PdfTools {
     private static Matrix matrixFor(Rectangle2D.Float target, float rotationDegrees,
                                     float sourceWidth, float sourceHeight,
                                     float sourceX, float sourceY) {
+        // On a quarter turn the artwork is laid out across the target's other axis and then
+        // turned into it, so that what ends up covering the page is the target itself. Scaling to
+        // the target and then rotating would turn the footprint as well, putting a 198x396 space
+        // under a 396x198 image.
+        int turns = Math.round(rotationDegrees) % 90 == 0
+                ? Math.floorMod(Math.round(rotationDegrees) / 90, 2) : 0;
+        float width = turns == 1 ? target.height : target.width;
+        float height = turns == 1 ? target.width : target.height;
+
         AffineTransform at = new AffineTransform();
         at.translate(target.x + target.width / 2f, target.y + target.height / 2f);
-        if (rotationDegrees != 0f) at.rotate(Math.toRadians(rotationDegrees));
-        at.translate(-target.width / 2f, -target.height / 2f);
-        at.scale(target.width / sourceWidth, target.height / sourceHeight);
+        // Negated because PDF user space has y pointing up, in which a positive AffineTransform
+        // angle turns counter-clockwise — the opposite of the clockwise degrees callers give.
+        if (rotationDegrees != 0f) at.rotate(Math.toRadians(-rotationDegrees));
+        at.translate(-width / 2f, -height / 2f);
+        at.scale(width / sourceWidth, height / sourceHeight);
         at.translate(-sourceX, -sourceY);
         return new Matrix(at);
     }
@@ -1097,12 +1178,25 @@ public class PdfTools {
             for (RedactRegion region : regions) {
                 if (region.getPage() < 0 || region.getPage() >= doc.getNumberOfPages()) continue;
                 PDPage page = doc.getPage(region.getPage());
-                float pageHeight = page.getMediaBox().getHeight();
-                // Invert Y: PDFBox origin is bottom-left; client sends top-left origin
-                float pdfY = pageHeight - region.getY() - region.getHeight();
-                byPage.computeIfAbsent(region.getPage(), k -> new ArrayList<>()).add(
-                        new java.awt.geom.Rectangle2D.Float(
-                                region.getX(), pdfY, region.getWidth(), region.getHeight()));
+                PDRectangle mediaBox = page.getMediaBox();
+
+                // A fractional box is resolved against the page it belongs to, so a document
+                // whose pages differ in size or rotation redacts correctly throughout. Point
+                // coordinates are taken as-is, for clients that still send them.
+                Placement placement = region.placement();
+                java.awt.geom.Rectangle2D.Float box;
+                if (placement != null) {
+                    box = placement.forPageRotation(page.getRotation())
+                            .resolve(mediaBox.getWidth(), mediaBox.getHeight(), 0, 0);
+                    box.x += mediaBox.getLowerLeftX();
+                    box.y += mediaBox.getLowerLeftY();
+                } else {
+                    // Invert Y: PDFBox origin is bottom-left; client sends top-left origin
+                    float pdfY = mediaBox.getHeight() - region.getY() - region.getHeight();
+                    box = new java.awt.geom.Rectangle2D.Float(
+                            region.getX(), pdfY, region.getWidth(), region.getHeight());
+                }
+                byPage.computeIfAbsent(region.getPage(), k -> new ArrayList<>()).add(box);
             }
 
             for (Map.Entry<Integer, List<java.awt.geom.Rectangle2D.Float>> entry : byPage.entrySet()) {
