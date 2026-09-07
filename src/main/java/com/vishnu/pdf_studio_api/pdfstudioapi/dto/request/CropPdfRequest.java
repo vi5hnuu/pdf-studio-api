@@ -6,6 +6,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.util.List;
+
 @Getter
 @Setter
 @NoArgsConstructor
@@ -16,4 +18,9 @@ public class CropPdfRequest {
     private Float marginBottom;
     private Float marginLeft;
     private Float marginRight;
+    /**
+     * 0-indexed pages to apply this to. Empty or absent applies to the whole document, which is
+     * what this tool always did.
+     */
+    private List<Integer> pages;
 }

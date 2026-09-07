@@ -93,10 +93,10 @@ class PdfServiceToolsTest {
     @Test
     @DisplayName("structural tools still produce valid PDFs")
     void structuralTools() throws Exception {
-        assertPdfWithPages(service.grayscalePdf(null, upload()), 6);
+        assertPdfWithPages(service.grayscalePdf(null, null, upload()), 6);
         assertPdfWithPages(service.compressPdf(null, CompressionLevel.RECOMMENDED, upload()), 6);
         assertPdfWithPages(service.optimizePdf(null, upload()), 6);
-        assertPdfWithPages(service.scalePdf(0.5d, upload()), 6);
+        assertPdfWithPages(service.scalePdf(0.5d, null, upload()), 6);
         assertPdfWithPages(service.mirrorPdf(null, null, upload()), 6);
         assertPdfWithPages(service.sanitizePdf(upload()), 6);
         assertPdfWithPages(service.removeMetadata(upload()), 6);
@@ -147,7 +147,7 @@ class PdfServiceToolsTest {
         // grayscale loads inside PdfTools, not through the service's open helper — this is exactly
         // the path that previously escaped the cap.
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.grayscalePdf(null, upload()));
+                () -> service.grayscalePdf(null, null, upload()));
         assertTrue(containsApiException(ex), "expected the page cap to surface, got: " + ex);
     }
 

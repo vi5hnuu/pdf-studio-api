@@ -230,11 +230,11 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> grayscalePdf(String outFileName, MultipartFile file) {
+    public ResponseEntity<Resource> grayscalePdf(String outFileName, List<Integer> pages, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "grayscale-pdf";
 
         try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
-            final byte[] doc = PdfTools.grayscalePdf(upload.path());
+            final byte[] doc = PdfTools.grayscalePdf(upload.path(), pages);
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
@@ -248,11 +248,11 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> cropPdf(String outFileName, Float marginTop, Float marginBottom, Float marginLeft, Float marginRight, MultipartFile file) {
+    public ResponseEntity<Resource> cropPdf(String outFileName, Float marginTop, Float marginBottom, Float marginLeft, Float marginRight, List<Integer> pages, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "cropped-pdf";
         try (OpenPdf opened = openPdf(file)) {
             final PDDocument document = opened.document();
-            final byte[] doc = PdfTools.cropPdf(document, marginTop, marginBottom, marginLeft, marginRight);
+            final byte[] doc = PdfTools.cropPdf(document, marginTop, marginBottom, marginLeft, marginRight, pages);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
@@ -520,20 +520,20 @@ public class PdfService {
     }
 
     /** Resizes every page to a standard size, scaling content to fit. */
-    public ResponseEntity<Resource> resizePage(com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageSizePreset size, MultipartFile file) {
+    public ResponseEntity<Resource> resizePage(com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageSizePreset size, List<Integer> pages, MultipartFile file) {
         if (size == null) size = com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageSizePreset.A4;
         try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
-            return pdfResponse(PdfTools.resizePageSize(upload.path(), size.getWidth(), size.getHeight()), "resized");
+            return pdfResponse(PdfTools.resizePageSize(upload.path(), size.getWidth(), size.getHeight(), pages), "resized");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
 
     /** Scales page size and content uniformly by the given factor. */
-    public ResponseEntity<Resource> scalePdf(Double scale, MultipartFile file) {
+    public ResponseEntity<Resource> scalePdf(Double scale, List<Integer> pages, MultipartFile file) {
         float f = (scale == null || scale <= 0) ? 1f : scale.floatValue();
         try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
-            return pdfResponse(PdfTools.scalePdf(upload.path(), f), "scaled");
+            return pdfResponse(PdfTools.scalePdf(upload.path(), f, pages), "scaled");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

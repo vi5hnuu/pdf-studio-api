@@ -113,8 +113,8 @@ public class PdfController {
     @ValidateUpload
     @PostMapping(value = "/grayscale-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> grayscalePdf(@RequestPart(value = "grayscale-pdf-info", required = false) GrayscalePdfRequest gpr, @RequestPart("file") MultipartFile file) {
-        String outFileName = gpr != null ? gpr.getOutFileName() : null;
-        return pdfService.grayscalePdf(outFileName, file);
+        if (gpr == null) gpr = new GrayscalePdfRequest();
+        return pdfService.grayscalePdf(gpr.getOutFileName(), gpr.getPages(), file);
     }
 
     @ChargeCredits(tool = "crop-pdf")
@@ -122,7 +122,7 @@ public class PdfController {
     @PostMapping(value = "/crop-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> cropPdf(@RequestPart(value = "crop-pdf-info", required = false) CropPdfRequest cpr, @RequestPart("file") MultipartFile file) {
         if (cpr == null) cpr = new CropPdfRequest();
-        return pdfService.cropPdf(cpr.getOutFileName(), cpr.getMarginTop(), cpr.getMarginBottom(), cpr.getMarginLeft(), cpr.getMarginRight(), file);
+        return pdfService.cropPdf(cpr.getOutFileName(), cpr.getMarginTop(), cpr.getMarginBottom(), cpr.getMarginLeft(), cpr.getMarginRight(), cpr.getPages(), file);
     }
 
     @ValidateUpload
@@ -322,7 +322,7 @@ public class PdfController {
             @RequestPart(value = "resize-page-info", required = false) ResizePageRequest req,
             @RequestPart("file") MultipartFile file) {
         if (req == null) req = new ResizePageRequest();
-        return pdfService.resizePage(req.getSize(), file);
+        return pdfService.resizePage(req.getSize(), req.getPages(), file);
     }
 
     /** Scales page size and content uniformly. */
@@ -333,7 +333,7 @@ public class PdfController {
             @RequestPart(value = "scale-pdf-info", required = false) ScalePdfRequest req,
             @RequestPart("file") MultipartFile file) {
         if (req == null) req = new ScalePdfRequest();
-        return pdfService.scalePdf(req.getScale(), file);
+        return pdfService.scalePdf(req.getScale(), req.getPages(), file);
     }
 
     /** Inserts a second PDF into the first after a chosen page. */

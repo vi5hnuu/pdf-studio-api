@@ -76,6 +76,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.List;
+import java.util.function.IntPredicate;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -172,21 +173,39 @@ public class PdfTools {
         return stripper.getText(document);
     }
 
-    public static byte[] grayscalePdf(Path pdfPath) throws IOException {
+    /**
+     * Converts pages to greyscale by rasterising them.
+     *
+     * <p>Pages outside the selection are carried over as vector artwork rather than re-rendered:
+     * that is both faithful (they keep their text and their resolution) and faster, since
+     * rendering is by far the expensive part of this tool.
+     *
+     * @param pages 0-indexed pages to convert; empty or absent converts the whole document
+     */
+    public static byte[] grayscalePdf(Path pdfPath, List<Integer> pages) throws IOException {
         try (PDDocument source = PdfDocuments.load(pdfPath);
              PDDocument output = new PDDocument();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
             PDFRenderer renderer = new PDFRenderer(source);
+            LayerUtility lu = new LayerUtility(output);
+            IntPredicate greyed = pageSelector(pages);
 
             for (int i = 0; i < source.getNumberOfPages(); i++) {
                 PDRectangle mediaBox = source.getPage(i).getMediaBox();
 
-                BufferedImage pageImage = renderer.renderImageWithDPI(i, 150, ImageType.GRAY);
-
                 PDPage newPage = new PDPage(new PDRectangle(mediaBox.getWidth(), mediaBox.getHeight()));
                 output.addPage(newPage);
 
+                if (!greyed.test(i)) {
+                    PDFormXObject form = lu.importPageAsForm(source, i);
+                    try (PDPageContentStream cs = new PDPageContentStream(output, newPage)) {
+                        cs.drawForm(form);
+                    }
+                    continue;
+                }
+
+                BufferedImage pageImage = renderer.renderImageWithDPI(i, 150, ImageType.GRAY);
                 PDImageXObject pdImage = LosslessFactory.createFromImage(output, pageImage);
                 try (PDPageContentStream cs = new PDPageContentStream(output, newPage)) {
                     cs.drawImage(pdImage, 0, 0, mediaBox.getWidth(), mediaBox.getHeight());
@@ -662,13 +681,23 @@ public class PdfTools {
         return ap;
     }
 
-    public static byte[] cropPdf(PDDocument document, Float marginTop, Float marginBottom, Float marginLeft, Float marginRight) throws IOException {
+    /**
+     * Trims the visible area of some or all pages.
+     *
+     * @param pages 0-indexed pages to crop; empty or absent crops the whole document. Scanned
+     *              documents routinely need a few pages trimmed and the rest left alone, which
+     *              was not expressible while this applied to everything.
+     */
+    public static byte[] cropPdf(PDDocument document, Float marginTop, Float marginBottom,
+                                 Float marginLeft, Float marginRight, List<Integer> pages) throws IOException {
         if (marginTop == null) marginTop = 0f;
         if (marginBottom == null) marginBottom = 0f;
         if (marginLeft == null) marginLeft = 0f;
         if (marginRight == null) marginRight = 0f;
+        IntPredicate cropped = pageSelector(pages);
 
         for (int i = 0; i < document.getNumberOfPages(); i++) {
+            if (!cropped.test(i)) continue;
             PDPage page = document.getPage(i);
             PDRectangle mb = page.getMediaBox();
             float llx = mb.getLowerLeftX() + marginLeft;
@@ -1240,6 +1269,21 @@ public class PdfTools {
      * by re-drawing each page as a form under a mirror matrix. {@code pageIndices}
      * empty = all pages; listed pages are flipped, the rest copied unchanged.
      */
+    /**
+     * Turns a caller's page selection into a test.
+     *
+     * <p>An absent or empty selection means every page — the behaviour these tools had before they
+     * could be restricted, so a caller that sends nothing sees no change. Shared so that "which
+     * pages?" means the same thing in every tool that asks.
+     *
+     * @param pages 0-indexed page numbers
+     */
+    private static IntPredicate pageSelector(List<Integer> pages) {
+        if (pages == null || pages.isEmpty()) return index -> true;
+        Set<Integer> selected = new HashSet<>(pages);
+        return selected::contains;
+    }
+
     public static byte[] mirrorPdf(Path pdfPath, boolean horizontal, List<Integer> pageIndices) throws IOException {
         try (PDDocument src = PdfDocuments.load(pdfPath);
              PDDocument out = new PDDocument();
@@ -1268,20 +1312,30 @@ public class PdfTools {
     }
 
     /** Resizes every page to a standard size, scaling content to fit and centering it. */
-    public static byte[] resizePageSize(Path pdfPath, float targetW, float targetH) throws IOException {
+    /**
+     * Re-lays every selected page onto a standard page size, centred and scaled to fit.
+     *
+     * @param pages 0-indexed pages to resize; empty or absent resizes the whole document.
+     */
+    public static byte[] resizePageSize(Path pdfPath, float targetW, float targetH,
+                                        List<Integer> pages) throws IOException {
         try (PDDocument src = PdfDocuments.load(pdfPath);
              PDDocument out = new PDDocument();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             LayerUtility lu = new LayerUtility(out);
+            IntPredicate resized = pageSelector(pages);
             int total = src.getNumberOfPages();
             for (int i = 0; i < total; i++) {
                 PDRectangle box = src.getPage(i).getMediaBox();
                 PDFormXObject form = lu.importPageAsForm(src, i);
-                PDPage outPage = new PDPage(new PDRectangle(targetW, targetH));
+                boolean resize = resized.test(i);
+                float pageW = resize ? targetW : box.getWidth();
+                float pageH = resize ? targetH : box.getHeight();
+                PDPage outPage = new PDPage(new PDRectangle(pageW, pageH));
                 out.addPage(outPage);
-                float scale = Math.min(targetW / box.getWidth(), targetH / box.getHeight());
-                float tx = (targetW - box.getWidth() * scale) / 2f;
-                float ty = (targetH - box.getHeight() * scale) / 2f;
+                float scale = Math.min(pageW / box.getWidth(), pageH / box.getHeight());
+                float tx = (pageW - box.getWidth() * scale) / 2f;
+                float ty = (pageH - box.getHeight() * scale) / 2f;
                 try (PDPageContentStream cs = new PDPageContentStream(out, outPage)) {
                     cs.transform(new Matrix(scale, 0, 0, scale, tx, ty));
                     cs.drawForm(form);
@@ -1293,20 +1347,28 @@ public class PdfTools {
     }
 
     /** Scales page size and content uniformly by {@code factor}. */
-    public static byte[] scalePdf(Path pdfPath, float factor) throws IOException {
+    /**
+     * Scales page dimensions by a factor.
+     *
+     * @param pages 0-indexed pages to scale; empty or absent scales the whole document. Pages
+     *              outside the selection keep their original size and content.
+     */
+    public static byte[] scalePdf(Path pdfPath, float factor, List<Integer> pages) throws IOException {
         if (factor <= 0) factor = 1f;
         try (PDDocument src = PdfDocuments.load(pdfPath);
              PDDocument out = new PDDocument();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             LayerUtility lu = new LayerUtility(out);
+            IntPredicate scaled = pageSelector(pages);
             int total = src.getNumberOfPages();
             for (int i = 0; i < total; i++) {
                 PDRectangle box = src.getPage(i).getMediaBox();
                 PDFormXObject form = lu.importPageAsForm(src, i);
-                PDPage outPage = new PDPage(new PDRectangle(box.getWidth() * factor, box.getHeight() * factor));
+                float pageFactor = scaled.test(i) ? factor : 1f;
+                PDPage outPage = new PDPage(new PDRectangle(box.getWidth() * pageFactor, box.getHeight() * pageFactor));
                 out.addPage(outPage);
                 try (PDPageContentStream cs = new PDPageContentStream(out, outPage)) {
-                    cs.transform(new Matrix(factor, 0, 0, factor, 0, 0));
+                    cs.transform(new Matrix(pageFactor, 0, 0, pageFactor, 0, 0));
                     cs.drawForm(form);
                 }
             }
