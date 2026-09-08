@@ -1,6 +1,7 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.validation;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.UploadProperties;
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.ArtworkKind;
 import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -83,6 +84,24 @@ public class UploadValidator {
     public void images(List<MultipartFile> files, int minimum, String partName) {
         requireCount(files, minimum, partName);
         for (MultipartFile file : files) image(file, partName);
+    }
+
+    // ── Either ────────────────────────────────────────────────────────────────────
+
+    /**
+     * Validates a part that may be either a PDF or an image, and reports which it is.
+     *
+     * <p>Stamping is the case this exists for: it accepted only a PDF, so a PNG logo or a scanned
+     * signature — the two things people most want to stamp — could not be used at all. The
+     * document itself is still validated with {@link #pdf}; only the artwork is permissive.
+     */
+    public ArtworkKind pdfOrImage(MultipartFile file, String partName) {
+        requirePresent(file, partName);
+        byte[] head = sniff(file);
+        if (indexOf(head, PDF) >= 0) return ArtworkKind.PDF;
+        if (looksLikeImage(head)) return ArtworkKind.IMAGE;
+        throw ApiException.invalidFile("'" + describe(file)
+                + "' is not a PDF or a supported image. Use a .pdf, or JPG, PNG, GIF, BMP or WebP.");
     }
 
     // ── Page counts (applied once a document is open) ──────────────────────────────

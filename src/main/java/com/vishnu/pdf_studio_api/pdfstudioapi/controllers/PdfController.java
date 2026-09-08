@@ -49,7 +49,7 @@ public class PdfController {
     @PostMapping(value = "/pdf-to-jpg",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> pdfToJpg(@RequestPart(value = "pdf-to-jpg-info",required = false) PdfToJpgRequest ptjI, @RequestPart("file") MultipartFile multipartFile){
         if(ptjI==null) ptjI=new PdfToJpgRequest();
-        return pdfService.pdfToJpg(multipartFile,ptjI.getOutFileName(),ptjI.getQuality(),ptjI.getSingle(),ptjI.getDirection(),ptjI.getImageGap());
+        return pdfService.pdfToJpg(multipartFile,ptjI.getOutFileName(),ptjI.getQuality(),ptjI.getSingle(),ptjI.getDirection(),ptjI.getImageGap(),ptjI.getPages());
     }
     @ChargeCredits(tool = "image-to-pdf")
     @HeavyTool
@@ -57,7 +57,7 @@ public class PdfController {
     @PostMapping(value = "/image-to-pdf",consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> imageToPdf(@RequestPart(value = "image-to-pdf-info",required = false) ImageToPdfRequest itp, @RequestPart("files") List<MultipartFile> files){
         if(itp==null) itp=new ImageToPdfRequest();
-        return pdfService.imageToPdf(itp.getOutFileName(),files);
+        return pdfService.imageToPdf(itp.getOutFileName(), itp.getPageSize(), itp.getOrientation(), itp.getMarginPt(), files);
     }
     @ChargeCredits(tool = "page-numbers")
     @ValidateUpload
@@ -104,8 +104,8 @@ public class PdfController {
     @ValidateUpload
     @PostMapping(value = "/extract-text", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> extractText(@RequestPart(value = "extract-text-info", required = false) ExtractTextRequest etr, @RequestPart("file") MultipartFile file) {
-        String outFileName = etr != null ? etr.getOutFileName() : null;
-        return pdfService.extractText(file, outFileName);
+        if (etr == null) etr = new ExtractTextRequest();
+        return pdfService.extractText(file, etr.getOutFileName(), etr.getPages());
     }
 
     @ChargeCredits(tool = "grayscale-pdf")
@@ -113,8 +113,8 @@ public class PdfController {
     @ValidateUpload
     @PostMapping(value = "/grayscale-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> grayscalePdf(@RequestPart(value = "grayscale-pdf-info", required = false) GrayscalePdfRequest gpr, @RequestPart("file") MultipartFile file) {
-        String outFileName = gpr != null ? gpr.getOutFileName() : null;
-        return pdfService.grayscalePdf(outFileName, file);
+        if (gpr == null) gpr = new GrayscalePdfRequest();
+        return pdfService.grayscalePdf(gpr.getOutFileName(), gpr.getPages(), file);
     }
 
     @ChargeCredits(tool = "crop-pdf")
@@ -122,7 +122,7 @@ public class PdfController {
     @PostMapping(value = "/crop-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> cropPdf(@RequestPart(value = "crop-pdf-info", required = false) CropPdfRequest cpr, @RequestPart("file") MultipartFile file) {
         if (cpr == null) cpr = new CropPdfRequest();
-        return pdfService.cropPdf(cpr.getOutFileName(), cpr.getMarginTop(), cpr.getMarginBottom(), cpr.getMarginLeft(), cpr.getMarginRight(), file);
+        return pdfService.cropPdf(cpr.getOutFileName(), cpr.getMarginTop(), cpr.getMarginBottom(), cpr.getMarginLeft(), cpr.getMarginRight(), cpr.keep(), cpr.overrides(), cpr.getPages(), file);
     }
 
     @ValidateUpload
@@ -170,12 +170,14 @@ public class PdfController {
         return pdfService.addBlankPages(abpr.getOutFileName(), abpr.getPositions(), abpr.getPageWidth(), abpr.getPageHeight(), file);
     }
 
+    /** Stamps artwork — a one-page PDF or an image — over a range of pages. */
     @ChargeCredits(tool = "stamp-pdf")
-    @ValidateUpload
+    @ValidateUpload(artworkParts = "stamp")
     @PostMapping(value = "/stamp-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> stampPdf(@RequestPart(value = "stamp-pdf-info", required = false) StampPdfRequest spr, @RequestPart("file") MultipartFile file, @RequestPart("stamp") MultipartFile stamp) {
         if (spr == null) spr = new StampPdfRequest();
-        return pdfService.stampPdf(spr.getOutFileName(), spr.getOpacity(), spr.getFromPage(), spr.getToPage(), file, stamp);
+        return pdfService.stampPdf(spr.getOutFileName(), spr.getOpacity(), spr.getFromPage(), spr.getToPage(),
+                spr.placement(), file, stamp);
     }
 
     /** Convert PDF to Word (.docx) — text-extraction based, preserves paragraph structure. */
@@ -215,8 +217,9 @@ public class PdfController {
     }
 
     /**
-     * Places an image at a user-defined position and size on a specific PDF page.
+     * Places an image at a user-defined position and size on one or more PDF pages.
      * Coordinates (x_frac, y_frac, width_frac, height_frac) are 0.0–1.0 fractions of page dimensions.
+     * Proportions are preserved unless the caller asks for fit=STRETCH.
      */
     @ChargeCredits(tool = "place-image")
     @ValidateUpload(imageParts = "image")
@@ -225,9 +228,7 @@ public class PdfController {
             @RequestPart(value = "place-image-info") PlaceImageRequest req,
             @RequestPart("file") MultipartFile file,
             @RequestPart("image") MultipartFile image) {
-        return pdfService.placeImage(req.getOutFileName(), req.getPage(),
-                req.getXFrac(), req.getYFrac(), req.getWidthFrac(), req.getHeightFrac(),
-                file, image);
+        return pdfService.placeImage(req.getOutFileName(), req.targetPages(), req.placement(), file, image);
     }
 
     /** Permanently blacks out rectangular regions on specified pages. */
@@ -321,7 +322,7 @@ public class PdfController {
             @RequestPart(value = "resize-page-info", required = false) ResizePageRequest req,
             @RequestPart("file") MultipartFile file) {
         if (req == null) req = new ResizePageRequest();
-        return pdfService.resizePage(req.getSize(), file);
+        return pdfService.resizePage(req.getSize(), req.getPages(), file);
     }
 
     /** Scales page size and content uniformly. */
@@ -332,7 +333,7 @@ public class PdfController {
             @RequestPart(value = "scale-pdf-info", required = false) ScalePdfRequest req,
             @RequestPart("file") MultipartFile file) {
         if (req == null) req = new ScalePdfRequest();
-        return pdfService.scalePdf(req.getScale(), file);
+        return pdfService.scalePdf(req.getScale(), req.getPages(), file);
     }
 
     /** Inserts a second PDF into the first after a chosen page. */

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.RedactPdfRequest.RedactRegion;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
+import com.vishnu.pdf_studio_api.pdfstudioapi.model.Placement;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import lombok.extern.slf4j.Slf4j;
 import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
@@ -64,6 +65,8 @@ import javax.imageio.ImageWriter;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.stream.MemoryCacheImageOutputStream;
 import java.awt.*;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import org.apache.pdfbox.io.RandomAccessReadBuffer;
 import java.io.ByteArrayOutputStream;
@@ -73,6 +76,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.List;
+import java.util.function.IntPredicate;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -163,27 +167,62 @@ public class PdfTools {
         return baos.toByteArray();
     }
 
-    public static String extractText(PDDocument document) throws IOException {
+    /**
+     * Pulls the text layer out of a document.
+     *
+     * @param pages 0-indexed pages to read; empty or absent reads the whole document. Wanting the
+     *              text of one chapter out of a long report should not mean extracting all of it.
+     */
+    public static String extractText(PDDocument document, List<Integer> pages) throws IOException {
         PDFTextStripper stripper = new PDFTextStripper();
         stripper.setSortByPosition(true);
-        return stripper.getText(document);
+        if (pages == null || pages.isEmpty()) return stripper.getText(document);
+
+        // Read page by page rather than with a start/end range, so a selection need not be
+        // contiguous — "pages 2, 5 and 9" is as valid a request as "pages 2 to 9".
+        StringBuilder text = new StringBuilder();
+        for (int index : pages.stream().distinct().sorted().toList()) {
+            if (index < 0 || index >= document.getNumberOfPages()) continue;
+            stripper.setStartPage(index + 1);
+            stripper.setEndPage(index + 1);
+            text.append(stripper.getText(document));
+        }
+        return text.toString();
     }
 
-    public static byte[] grayscalePdf(Path pdfPath) throws IOException {
+    /**
+     * Converts pages to greyscale by rasterising them.
+     *
+     * <p>Pages outside the selection are carried over as vector artwork rather than re-rendered:
+     * that is both faithful (they keep their text and their resolution) and faster, since
+     * rendering is by far the expensive part of this tool.
+     *
+     * @param pages 0-indexed pages to convert; empty or absent converts the whole document
+     */
+    public static byte[] grayscalePdf(Path pdfPath, List<Integer> pages) throws IOException {
         try (PDDocument source = PdfDocuments.load(pdfPath);
              PDDocument output = new PDDocument();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
             PDFRenderer renderer = new PDFRenderer(source);
+            LayerUtility lu = new LayerUtility(output);
+            IntPredicate greyed = pageSelector(pages);
 
             for (int i = 0; i < source.getNumberOfPages(); i++) {
                 PDRectangle mediaBox = source.getPage(i).getMediaBox();
 
-                BufferedImage pageImage = renderer.renderImageWithDPI(i, 150, ImageType.GRAY);
-
                 PDPage newPage = new PDPage(new PDRectangle(mediaBox.getWidth(), mediaBox.getHeight()));
                 output.addPage(newPage);
 
+                if (!greyed.test(i)) {
+                    PDFormXObject form = lu.importPageAsForm(source, i);
+                    try (PDPageContentStream cs = new PDPageContentStream(output, newPage)) {
+                        cs.drawForm(form);
+                    }
+                    continue;
+                }
+
+                BufferedImage pageImage = renderer.renderImageWithDPI(i, 150, ImageType.GRAY);
                 PDImageXObject pdImage = LosslessFactory.createFromImage(output, pageImage);
                 try (PDPageContentStream cs = new PDPageContentStream(output, newPage)) {
                     cs.drawImage(pdImage, 0, 0, mediaBox.getWidth(), mediaBox.getHeight());
@@ -234,12 +273,29 @@ public class PdfTools {
         }
     }
 
-    public static byte[] pdfToImage(PDDocument document, Boolean singleImage, Direction direction, Quality quality, Integer imageGap) throws IOException {
-        if (singleImage) return pdfToSingleImage(document, direction, quality, imageGap);
-        else return pdfToImagesZip(document, quality);
+    /**
+     * Renders pages to JPEG, as one combined image or a zip of one file per page.
+     *
+     * @param pages 0-indexed pages to render; empty or absent renders the whole document.
+     *              Rendering is the costliest thing this service does, so converting a 200-page
+     *              report to get one page was expensive for the user as well as the server.
+     */
+    public static byte[] pdfToImage(PDDocument document, Boolean singleImage, Direction direction,
+                                    Quality quality, Integer imageGap, List<Integer> pages) throws IOException {
+        if (singleImage) return pdfToSingleImage(document, direction, quality, imageGap, pages);
+        else return pdfToImagesZip(document, quality, pages);
     }
 
-    public static byte[] imagesToPdf(List<MultipartFile> files) throws Exception {
+    /**
+     * Builds a PDF from images, one image per page.
+     *
+     * <p>Pages used to be sized one point per pixel, which made a phone photo into a page around
+     * 55 by 42 inches and gave a mixed set of images a different page size on every page. A real
+     * page size with the image fitted inside it is what makes the result printable;
+     * {@link ImagePageSize#MATCH_IMAGE} keeps the original behaviour for callers that want it.
+     */
+    public static byte[] imagesToPdf(List<MultipartFile> files, ImagePageSize pageSize,
+                                     PageOrientation orientation, float marginPt) throws Exception {
         // try-with-resources: the document was previously closed only on the success path, so
         // one unreadable image among many leaked the document and its scratch file.
         try (PDDocument document = new PDDocument();
@@ -252,22 +308,59 @@ public class PdfTools {
                     // reading width off it produced an opaque NullPointerException.
                     throw new IOException("Unsupported or corrupt image: " + file.getOriginalFilename());
                 }
-                float width = bimg.getWidth();
-                float height = bimg.getHeight();
+                float imageWidth = bimg.getWidth();
+                float imageHeight = bimg.getHeight();
 
-                PDPage page = new PDPage(new PDRectangle(width, height));
+                PDRectangle pageBox = pageBoxFor(pageSize, orientation, imageWidth, imageHeight);
+                PDPage page = new PDPage(pageBox);
                 document.addPage(page);
 
                 PDImageXObject img = PDImageXObject.createFromByteArray(
                         document, file.getBytes(), file.getOriginalFilename());
+
+                // The content box is the page less the margin; the image is fitted inside it with
+                // its proportions intact, which is the whole point of not using pixels as points.
+                float margin = Math.max(0f, marginPt);
+                float pageWidth = pageBox.getWidth();
+                float pageHeight = pageBox.getHeight();
+                float usableWidth = Math.max(1f, pageWidth - 2 * margin);
+                float usableHeight = Math.max(1f, pageHeight - 2 * margin);
+                Placement placement = new Placement(margin / pageWidth, margin / pageHeight,
+                        usableWidth / pageWidth, usableHeight / pageHeight, 0f, ImageFit.CONTAIN);
+                Rectangle2D.Float target = placement.resolve(pageWidth, pageHeight, imageWidth, imageHeight);
+
                 try (PDPageContentStream contentStream = new PDPageContentStream(document, page)) {
-                    contentStream.drawImage(img, 0, 0);
+                    contentStream.drawImage(img, target.x, target.y, target.width, target.height);
                 }
             }
 
             document.save(byteArrayOutputStream, CompressParameters.NO_COMPRESSION);
             return byteArrayOutputStream.toByteArray();
         }
+    }
+
+    /**
+     * The page an image is placed on.
+     *
+     * <p>Under {@link PageOrientation#AUTO} the page follows the image, so a landscape photo is
+     * not letterboxed into a portrait page with bands of white above and below it.
+     */
+    private static PDRectangle pageBoxFor(ImagePageSize pageSize, PageOrientation orientation,
+                                          float imageWidth, float imageHeight) {
+        if (pageSize == null) pageSize = ImagePageSize.A4;
+        if (pageSize == ImagePageSize.MATCH_IMAGE) {
+            return new PDRectangle(imageWidth, imageHeight);
+        }
+
+        PageSizePreset preset = pageSize.getPreset();
+        boolean landscape = switch (orientation == null ? PageOrientation.AUTO : orientation) {
+            case LANDSCAPE -> true;
+            case PORTRAIT -> false;
+            case AUTO -> imageWidth > imageHeight;
+        };
+        return landscape
+                ? new PDRectangle(preset.getHeight(), preset.getWidth())
+                : new PDRectangle(preset.getWidth(), preset.getHeight());
     }
 
     public static byte[] reorderPdf(Path pdfPath, int[] order) throws Exception {
@@ -289,7 +382,8 @@ public class PdfTools {
         }
     }
 
-    public static byte[] pdfToSingleImage(PDDocument document, Direction direction, Quality quality, Integer imageGap) throws IOException {
+    public static byte[] pdfToSingleImage(PDDocument document, Direction direction, Quality quality,
+                                          Integer imageGap, List<Integer> pages) throws IOException {
         if (document == null) throw new IllegalArgumentException("pdf document is required");
 
         if (direction == null) direction = Direction.VERTICAL;
@@ -300,7 +394,9 @@ public class PdfTools {
 
         // Combine all pages into a single image
         BufferedImage combinedImage = null;
+        IntPredicate wanted = pageSelector(pages);
         for (int pageIndex = 0; pageIndex < document.getNumberOfPages(); pageIndex++) {
+            if (!wanted.test(pageIndex)) continue;
             BufferedImage pageImage = pdfRenderer.renderImageWithDPI(pageIndex, quality.getDpi(), ImageType.RGB);
             if (combinedImage == null) combinedImage = pageImage;
             else
@@ -313,7 +409,7 @@ public class PdfTools {
         return bytes;
     }
 
-    public static byte[] pdfToImagesZip(PDDocument document, Quality quality) throws IOException {
+    public static byte[] pdfToImagesZip(PDDocument document, Quality quality, List<Integer> pages) throws IOException {
         if (document == null) throw new IllegalArgumentException("pdf document is required");
         if (quality == null) quality = Quality.LOW;
 
@@ -321,8 +417,10 @@ public class PdfTools {
              ZipOutputStream zip = new ZipOutputStream(zipOutputStream);
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             PDFRenderer pdfRenderer = new PDFRenderer(document);
+            IntPredicate wanted = pageSelector(pages);
 
             for (int pageIndex = 0; pageIndex < document.getNumberOfPages(); pageIndex++) {
+                if (!wanted.test(pageIndex)) continue;
                 baos.reset();
                 BufferedImage pageImage = pdfRenderer.renderImageWithDPI(pageIndex, quality.getDpi(), ImageType.RGB);
                 ImageIO.write(pageImage, "JPG", baos);
@@ -613,27 +711,90 @@ public class PdfTools {
         return ap;
     }
 
-    public static byte[] cropPdf(PDDocument document, Float marginTop, Float marginBottom, Float marginLeft, Float marginRight) throws IOException {
+    /**
+     * Trims the visible area of some or all pages.
+     *
+     * <p>The area to keep should be given as {@code keep} — a fraction of each page — rather than
+     * as point margins. Margins in points are necessarily measured against <em>one</em> page, and
+     * a document whose pages are not all the same size then gets a crop that is wrong everywhere
+     * else: too little, too much, or, where the margins exceed the page altogether, none at all.
+     * That last case used to pass silently, so a mixed document came back looking cropped on page
+     * one and untouched after it.
+     *
+     * <p>The point margins are still honoured when no fractional box is sent, for callers that
+     * have not been updated, but they no longer fail quietly.
+     *
+     * @param keep      the area to keep as a fraction of each page, in the orientation the page is
+     *                  displayed in; {@code null} falls back to the point margins
+     * @param overrides crops for individual pages, replacing {@code keep} on the pages they name.
+     *                  A document is usually cropped the same way throughout, so the default
+     *                  covers it and pages the caller never looks at are still cropped; scans are
+     *                  the exception, where one crooked page needs its own treatment.
+     * @param pages     0-indexed pages to crop; empty or absent crops the whole document. Scanned
+     *                  documents routinely need a few pages trimmed and the rest left alone, which
+     *                  was not expressible while this applied to everything.
+     */
+    public static byte[] cropPdf(PDDocument document, Float marginTop, Float marginBottom,
+                                 Float marginLeft, Float marginRight, Placement keep,
+                                 Map<Integer, Placement> overrides,
+                                 List<Integer> pages) throws IOException {
         if (marginTop == null) marginTop = 0f;
         if (marginBottom == null) marginBottom = 0f;
         if (marginLeft == null) marginLeft = 0f;
         if (marginRight == null) marginRight = 0f;
+        IntPredicate cropped = pageSelector(pages);
 
         for (int i = 0; i < document.getNumberOfPages(); i++) {
+            // An override names a page explicitly, so it is honoured even when that page falls
+            // outside the general selection: singling a page out is itself the instruction.
+            Placement pageKeep = overrides == null ? null : overrides.get(i);
+            if (pageKeep == null && !cropped.test(i)) continue;
+            if (pageKeep == null) pageKeep = keep;
+
             PDPage page = document.getPage(i);
             PDRectangle mb = page.getMediaBox();
-            float llx = mb.getLowerLeftX() + marginLeft;
-            float lly = mb.getLowerLeftY() + marginBottom;
-            float width = mb.getWidth() - marginLeft - marginRight;
-            float height = mb.getHeight() - marginTop - marginBottom;
-            if (width > 0 && height > 0) {
-                page.setCropBox(new PDRectangle(llx, lly, width, height));
-            }
+
+            PDRectangle box = pageKeep != null
+                    ? cropBoxFrom(pageKeep, page, mb)
+                    : cropBoxFrom(mb, marginTop, marginBottom, marginLeft, marginRight, i);
+            page.setCropBox(box);
         }
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         document.save(baos, CompressParameters.NO_COMPRESSION);
         return baos.toByteArray();
+    }
+
+    /**
+     * The kept area of one page, from a fraction of that same page.
+     *
+     * <p>Because the box is a fraction of the page it is being applied to, it cannot fall outside
+     * it however the page is sized or turned — which is exactly what point margins could not
+     * promise.
+     */
+    private static PDRectangle cropBoxFrom(Placement keep, PDPage page, PDRectangle mediaBox) {
+        Rectangle2D.Float rect = keep
+                .forPageRotation(page.getRotation())
+                .resolve(mediaBox.getWidth(), mediaBox.getHeight(), 0, 0);
+        return new PDRectangle(
+                mediaBox.getLowerLeftX() + rect.x,
+                mediaBox.getLowerLeftY() + rect.y,
+                rect.width, rect.height);
+    }
+
+    /** The kept area of one page from point margins, rejecting margins the page cannot meet. */
+    private static PDRectangle cropBoxFrom(PDRectangle mediaBox, float top, float bottom,
+                                           float left, float right, int pageIndex) {
+        float width = mediaBox.getWidth() - left - right;
+        float height = mediaBox.getHeight() - top - bottom;
+        if (width <= 0 || height <= 0) {
+            throw ApiException.badRequest("The crop margins are larger than page "
+                    + (pageIndex + 1) + ", which is " + Math.round(mediaBox.getWidth()) + " by "
+                    + Math.round(mediaBox.getHeight()) + " points. This document's pages are not "
+                    + "all the same size, so choose the area to keep as a proportion of the page.");
+        }
+        return new PDRectangle(mediaBox.getLowerLeftX() + left, mediaBox.getLowerLeftY() + bottom,
+                width, height);
     }
 
     public static Map<String, String> getMetadata(PDDocument document) {
@@ -801,28 +962,53 @@ public class PdfTools {
         }
     }
 
-    public static byte[] stampPdf(Path sourcePath, Path stampPath, Float opacity, Integer fromPage, Integer toPage) throws IOException {
+    /**
+     * Draws artwork onto a range of pages.
+     *
+     * <p>Two limits used to sit here at once. The artwork had to be a <b>PDF</b>, so a PNG logo or
+     * a scanned signature — the things people actually stamp — could not be used; and it was drawn
+     * with a bare {@code drawForm}, meaning it landed at its own origin at its own size with no way
+     * to say where it should go. An image stamp and a PDF stamp now travel the same placement path.
+     *
+     * @param stampKind  what the artwork is, decided from its bytes during validation
+     * @param placement  where and how big, or {@code null} to draw at natural size at the page
+     *                   origin, which is what callers that send no box have always got
+     */
+    public static byte[] stampPdf(Path sourcePath, Path stampPath, ArtworkKind stampKind,
+                                  Float opacity, Integer fromPage, Integer toPage,
+                                  Placement placement) throws IOException {
+        return stampKind == ArtworkKind.IMAGE
+                ? stampWithImage(sourcePath, Files.readAllBytes(stampPath), opacity, fromPage, toPage, placement)
+                : stampWithPdf(sourcePath, stampPath, opacity, fromPage, toPage, placement);
+    }
+
+    private static byte[] stampWithPdf(Path sourcePath, Path stampPath, Float opacity,
+                                       Integer fromPage, Integer toPage, Placement placement) throws IOException {
         try (PDDocument source = PdfDocuments.load(sourcePath);
              PDDocument stamp = PdfDocuments.load(stampPath);
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
-            if (fromPage == null) fromPage = 0;
-            if (toPage == null) toPage = source.getNumberOfPages() - 1;
-            if (opacity == null) opacity = 1.0f;
+            // Imported once, then referenced by every page in the range, so a 200-page stamp adds
+            // one copy of the artwork to the file rather than two hundred.
+            PDFormXObject stampForm = new LayerUtility(source).importPageAsForm(stamp, 0);
+            PDRectangle bbox = stampForm.getBBox();
 
-            LayerUtility layerUtility = new LayerUtility(source);
-            PDFormXObject stampForm = layerUtility.importPageAsForm(stamp, 0);
-
-            for (int pNo = Math.max(0, fromPage); pNo <= toPage && pNo < source.getNumberOfPages(); pNo++) {
-                PDPage page = source.getPage(pNo);
-                try (PDPageContentStream cs = new PDPageContentStream(source, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
-                    if (opacity < 1.0f) {
-                        PDExtendedGraphicsState gs = new PDExtendedGraphicsState();
-                        gs.setNonStrokingAlphaConstant(opacity);
-                        gs.setAlphaSourceFlag(true);
-                        cs.setGraphicsStateParameters(gs);
+            for (int pageNo : stampRange(source, fromPage, toPage)) {
+                PDPage page = source.getPage(pageNo);
+                try (PDPageContentStream cs = openStampStream(source, page, opacity)) {
+                    if (placement == null) {
+                        cs.drawForm(stampForm);
+                    } else {
+                        Rectangle2D.Float target = resolveOn(page, placement, bbox.getWidth(), bbox.getHeight());
+                        cs.saveGraphicsState();
+                        // A form draws in its own bbox coordinates, so the matrix maps that box
+                        // onto the target rather than mapping the unit square as an image does.
+                        cs.transform(matrixFor(target, artworkRotation(page, placement),
+                                bbox.getWidth(), bbox.getHeight(),
+                                bbox.getLowerLeftX(), bbox.getLowerLeftY()));
+                        cs.drawForm(stampForm);
+                        cs.restoreGraphicsState();
                     }
-                    cs.drawForm(stampForm);
                 }
             }
 
@@ -831,36 +1017,157 @@ public class PdfTools {
         }
     }
 
+    private static byte[] stampWithImage(Path sourcePath, byte[] imageBytes, Float opacity,
+                                         Integer fromPage, Integer toPage, Placement placement) throws IOException {
+        try (PDDocument source = PdfDocuments.load(sourcePath);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+            PDImageXObject artwork = PDImageXObject.createFromByteArray(source, imageBytes, "stamp");
+
+            for (int pageNo : stampRange(source, fromPage, toPage)) {
+                PDPage page = source.getPage(pageNo);
+                try (PDPageContentStream cs = openStampStream(source, page, opacity)) {
+                    drawArtwork(cs, artwork, page, placement);
+                }
+            }
+
+            source.save(baos, CompressParameters.NO_COMPRESSION);
+            return baos.toByteArray();
+        }
+    }
+
+    /** The page indices a {@code fromPage}/{@code toPage} pair selects, clamped to the document. */
+    private static List<Integer> stampRange(PDDocument document, Integer fromPage, Integer toPage) {
+        int first = Math.max(0, fromPage == null ? 0 : fromPage);
+        int last = Math.min(document.getNumberOfPages() - 1,
+                toPage == null ? document.getNumberOfPages() - 1 : toPage);
+        List<Integer> pages = new ArrayList<>();
+        for (int i = first; i <= last; i++) pages.add(i);
+        return pages;
+    }
+
+    private static PDPageContentStream openStampStream(PDDocument document, PDPage page, Float opacity) throws IOException {
+        PDPageContentStream cs = new PDPageContentStream(
+                document, page, PDPageContentStream.AppendMode.APPEND, true, true);
+        if (opacity != null && opacity < 1.0f) {
+            PDExtendedGraphicsState gs = new PDExtendedGraphicsState();
+            gs.setNonStrokingAlphaConstant(opacity);
+            gs.setAlphaSourceFlag(true);
+            cs.setGraphicsStateParameters(gs);
+        }
+        return cs;
+    }
+
+    /** Draws an image either into its placement or, with none, filling the page as before. */
+    private static void drawArtwork(PDPageContentStream cs, PDImageXObject artwork,
+                                    PDPage page, Placement placement) throws IOException {
+        if (placement == null) {
+            // No box given: sit the image at its natural size in the page's top-left corner, which
+            // is the closest image equivalent of an unpositioned PDF stamp.
+            PDRectangle mediaBox = page.getMediaBox();
+            cs.drawImage(artwork, mediaBox.getLowerLeftX(),
+                    mediaBox.getUpperRightY() - artwork.getHeight(),
+                    artwork.getWidth(), artwork.getHeight());
+            return;
+        }
+        Rectangle2D.Float target = resolveOn(page, placement, artwork.getWidth(), artwork.getHeight());
+        cs.drawImage(artwork, matrixFor(target, artworkRotation(page, placement), 1f, 1f, 0f, 0f));
+    }
+
     /**
-     * Places an image at an exact position/size on a single PDF page.
-     * x_frac, y_frac: top-left position as fractions of page dimensions (0.0–1.0).
-     * widthFrac, heightFrac: image size as fractions of page dimensions.
-     * PDFBox origin is bottom-left, so y is converted from top-left fraction.
+     * Where artwork lands on a page, honouring how that page is turned.
+     *
+     * <p>The caller drew the box on the page as displayed. A page carrying {@code /Rotate 90} is
+     * shown on its side, so the box has to be fitted against the displayed dimensions and only
+     * then mapped back into the page's stored ones — fitting against the stored pair would use
+     * the wrong shape, and placing without the mapping would put the artwork somewhere else
+     * entirely.
+     */
+    private static Rectangle2D.Float resolveOn(PDPage page, Placement placement,
+                                               float contentWidth, float contentHeight) {
+        PDRectangle mediaBox = page.getMediaBox();
+        boolean quarterTurned = Math.floorMod(page.getRotation() / 90, 2) == 1
+                && page.getRotation() % 90 == 0;
+        float displayWidth = quarterTurned ? mediaBox.getHeight() : mediaBox.getWidth();
+        float displayHeight = quarterTurned ? mediaBox.getWidth() : mediaBox.getHeight();
+
+        return placement
+                .fitted(displayWidth, displayHeight, contentWidth, contentHeight)
+                .forPageRotation(page.getRotation())
+                .resolve(mediaBox.getWidth(), mediaBox.getHeight(), contentWidth, contentHeight);
+    }
+
+    /**
+     * How far the artwork itself must be turned to sit upright on a rotated page.
+     *
+     * <p>The page's own rotation is undone, so a signature dropped on a sideways page reads the
+     * same way the page does rather than lying across it.
+     */
+    private static float artworkRotation(PDPage page, Placement placement) {
+        return placement.rotation() - page.getRotation();
+    }
+
+    /**
+     * Maps artwork of size {@code sourceWidth} x {@code sourceHeight} (origin at
+     * {@code sourceX},{@code sourceY}) onto {@code target}, rotated about the target's centre.
+     *
+     * <p>Built with {@link AffineTransform} rather than by composing {@link Matrix} products
+     * because its ordering is unambiguous: each call wraps the transform applied before it.
+     */
+    private static Matrix matrixFor(Rectangle2D.Float target, float rotationDegrees,
+                                    float sourceWidth, float sourceHeight,
+                                    float sourceX, float sourceY) {
+        // On a quarter turn the artwork is laid out across the target's other axis and then
+        // turned into it, so that what ends up covering the page is the target itself. Scaling to
+        // the target and then rotating would turn the footprint as well, putting a 198x396 space
+        // under a 396x198 image.
+        int turns = Math.round(rotationDegrees) % 90 == 0
+                ? Math.floorMod(Math.round(rotationDegrees) / 90, 2) : 0;
+        float width = turns == 1 ? target.height : target.width;
+        float height = turns == 1 ? target.width : target.height;
+
+        AffineTransform at = new AffineTransform();
+        at.translate(target.x + target.width / 2f, target.y + target.height / 2f);
+        // Negated because PDF user space has y pointing up, in which a positive AffineTransform
+        // angle turns counter-clockwise — the opposite of the clockwise degrees callers give.
+        if (rotationDegrees != 0f) at.rotate(Math.toRadians(-rotationDegrees));
+        at.translate(-width / 2f, -height / 2f);
+        at.scale(width / sourceWidth, height / sourceHeight);
+        at.translate(-sourceX, -sourceY);
+        return new Matrix(at);
+    }
+
+    /**
+     * Places an image on one or more pages.
+     *
+     * <p>Was single-page and unconditionally stretching: the drawn size came straight from the
+     * requested box with no reference to the image's own proportions, so a signature dropped into
+     * a square box came out square. {@link Placement} now decides the geometry, defaulting to
+     * preserving proportions, and the image is embedded once however many pages it appears on.
+     *
+     * @param pages 0-indexed pages to draw on; out-of-range entries are ignored
      */
     public static byte[] placeImage(Path pdfPath, byte[] imageBytes,
-                                    int pageIndex, float xFrac, float yFrac,
-                                    float widthFrac, float heightFrac) throws Exception {
+                                    List<Integer> pages, Placement placement) throws IOException {
         try (PDDocument doc = PdfDocuments.load(pdfPath);
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
-            if (pageIndex < 0 || pageIndex >= doc.getNumberOfPages())
-                throw new IllegalArgumentException("Page index out of range: " + pageIndex);
+            List<Integer> targets = pages == null ? List.of()
+                    : pages.stream().distinct().sorted()
+                    .filter(i -> i >= 0 && i < doc.getNumberOfPages()).toList();
+            if (targets.isEmpty()) {
+                throw ApiException.badRequest("No valid page was selected for the image. "
+                        + "This PDF has " + doc.getNumberOfPages() + " page(s).");
+            }
 
-            PDPage page = doc.getPage(pageIndex);
-            PDRectangle mediaBox = page.getMediaBox();
-            float pageWidth = mediaBox.getWidth();
-            float pageHeight = mediaBox.getHeight();
+            PDImageXObject artwork = PDImageXObject.createFromByteArray(doc, imageBytes, "overlay");
 
-            float x = xFrac * pageWidth;
-            float w = widthFrac * pageWidth;
-            float h = heightFrac * pageHeight;
-            // Convert from top-left to bottom-left coordinate origin used by PDFBox
-            float y = pageHeight - (yFrac * pageHeight) - h;
-
-            PDImageXObject pdImage = PDImageXObject.createFromByteArray(doc, imageBytes, "overlay");
-
-            try (PDPageContentStream cs = new PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
-                cs.drawImage(pdImage, x, y, w, h);
+            for (int pageIndex : targets) {
+                PDPage page = doc.getPage(pageIndex);
+                try (PDPageContentStream cs = new PDPageContentStream(
+                        doc, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                    drawArtwork(cs, artwork, page, placement);
+                }
             }
 
             doc.save(baos, CompressParameters.NO_COMPRESSION);
@@ -881,12 +1188,25 @@ public class PdfTools {
             for (RedactRegion region : regions) {
                 if (region.getPage() < 0 || region.getPage() >= doc.getNumberOfPages()) continue;
                 PDPage page = doc.getPage(region.getPage());
-                float pageHeight = page.getMediaBox().getHeight();
-                // Invert Y: PDFBox origin is bottom-left; client sends top-left origin
-                float pdfY = pageHeight - region.getY() - region.getHeight();
-                byPage.computeIfAbsent(region.getPage(), k -> new ArrayList<>()).add(
-                        new java.awt.geom.Rectangle2D.Float(
-                                region.getX(), pdfY, region.getWidth(), region.getHeight()));
+                PDRectangle mediaBox = page.getMediaBox();
+
+                // A fractional box is resolved against the page it belongs to, so a document
+                // whose pages differ in size or rotation redacts correctly throughout. Point
+                // coordinates are taken as-is, for clients that still send them.
+                Placement placement = region.placement();
+                java.awt.geom.Rectangle2D.Float box;
+                if (placement != null) {
+                    box = placement.forPageRotation(page.getRotation())
+                            .resolve(mediaBox.getWidth(), mediaBox.getHeight(), 0, 0);
+                    box.x += mediaBox.getLowerLeftX();
+                    box.y += mediaBox.getLowerLeftY();
+                } else {
+                    // Invert Y: PDFBox origin is bottom-left; client sends top-left origin
+                    float pdfY = mediaBox.getHeight() - region.getY() - region.getHeight();
+                    box = new java.awt.geom.Rectangle2D.Float(
+                            region.getX(), pdfY, region.getWidth(), region.getHeight());
+                }
+                byPage.computeIfAbsent(region.getPage(), k -> new ArrayList<>()).add(box);
             }
 
             for (Map.Entry<Integer, List<java.awt.geom.Rectangle2D.Float>> entry : byPage.entrySet()) {
@@ -1083,6 +1403,21 @@ public class PdfTools {
      * by re-drawing each page as a form under a mirror matrix. {@code pageIndices}
      * empty = all pages; listed pages are flipped, the rest copied unchanged.
      */
+    /**
+     * Turns a caller's page selection into a test.
+     *
+     * <p>An absent or empty selection means every page — the behaviour these tools had before they
+     * could be restricted, so a caller that sends nothing sees no change. Shared so that "which
+     * pages?" means the same thing in every tool that asks.
+     *
+     * @param pages 0-indexed page numbers
+     */
+    private static IntPredicate pageSelector(List<Integer> pages) {
+        if (pages == null || pages.isEmpty()) return index -> true;
+        Set<Integer> selected = new HashSet<>(pages);
+        return selected::contains;
+    }
+
     public static byte[] mirrorPdf(Path pdfPath, boolean horizontal, List<Integer> pageIndices) throws IOException {
         try (PDDocument src = PdfDocuments.load(pdfPath);
              PDDocument out = new PDDocument();
@@ -1111,20 +1446,30 @@ public class PdfTools {
     }
 
     /** Resizes every page to a standard size, scaling content to fit and centering it. */
-    public static byte[] resizePageSize(Path pdfPath, float targetW, float targetH) throws IOException {
+    /**
+     * Re-lays every selected page onto a standard page size, centred and scaled to fit.
+     *
+     * @param pages 0-indexed pages to resize; empty or absent resizes the whole document.
+     */
+    public static byte[] resizePageSize(Path pdfPath, float targetW, float targetH,
+                                        List<Integer> pages) throws IOException {
         try (PDDocument src = PdfDocuments.load(pdfPath);
              PDDocument out = new PDDocument();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             LayerUtility lu = new LayerUtility(out);
+            IntPredicate resized = pageSelector(pages);
             int total = src.getNumberOfPages();
             for (int i = 0; i < total; i++) {
                 PDRectangle box = src.getPage(i).getMediaBox();
                 PDFormXObject form = lu.importPageAsForm(src, i);
-                PDPage outPage = new PDPage(new PDRectangle(targetW, targetH));
+                boolean resize = resized.test(i);
+                float pageW = resize ? targetW : box.getWidth();
+                float pageH = resize ? targetH : box.getHeight();
+                PDPage outPage = new PDPage(new PDRectangle(pageW, pageH));
                 out.addPage(outPage);
-                float scale = Math.min(targetW / box.getWidth(), targetH / box.getHeight());
-                float tx = (targetW - box.getWidth() * scale) / 2f;
-                float ty = (targetH - box.getHeight() * scale) / 2f;
+                float scale = Math.min(pageW / box.getWidth(), pageH / box.getHeight());
+                float tx = (pageW - box.getWidth() * scale) / 2f;
+                float ty = (pageH - box.getHeight() * scale) / 2f;
                 try (PDPageContentStream cs = new PDPageContentStream(out, outPage)) {
                     cs.transform(new Matrix(scale, 0, 0, scale, tx, ty));
                     cs.drawForm(form);
@@ -1136,20 +1481,28 @@ public class PdfTools {
     }
 
     /** Scales page size and content uniformly by {@code factor}. */
-    public static byte[] scalePdf(Path pdfPath, float factor) throws IOException {
+    /**
+     * Scales page dimensions by a factor.
+     *
+     * @param pages 0-indexed pages to scale; empty or absent scales the whole document. Pages
+     *              outside the selection keep their original size and content.
+     */
+    public static byte[] scalePdf(Path pdfPath, float factor, List<Integer> pages) throws IOException {
         if (factor <= 0) factor = 1f;
         try (PDDocument src = PdfDocuments.load(pdfPath);
              PDDocument out = new PDDocument();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             LayerUtility lu = new LayerUtility(out);
+            IntPredicate scaled = pageSelector(pages);
             int total = src.getNumberOfPages();
             for (int i = 0; i < total; i++) {
                 PDRectangle box = src.getPage(i).getMediaBox();
                 PDFormXObject form = lu.importPageAsForm(src, i);
-                PDPage outPage = new PDPage(new PDRectangle(box.getWidth() * factor, box.getHeight() * factor));
+                float pageFactor = scaled.test(i) ? factor : 1f;
+                PDPage outPage = new PDPage(new PDRectangle(box.getWidth() * pageFactor, box.getHeight() * pageFactor));
                 out.addPage(outPage);
                 try (PDPageContentStream cs = new PDPageContentStream(out, outPage)) {
-                    cs.transform(new Matrix(factor, 0, 0, factor, 0, 0));
+                    cs.transform(new Matrix(pageFactor, 0, 0, pageFactor, 0, 0));
                     cs.drawForm(form);
                 }
             }

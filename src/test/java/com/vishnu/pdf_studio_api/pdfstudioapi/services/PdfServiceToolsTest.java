@@ -1,6 +1,8 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.LoadProperties;
+import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.UploadProperties;
+import com.vishnu.pdf_studio_api.pdfstudioapi.validation.UploadValidator;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.CompressionLevel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfDocuments;
@@ -37,7 +39,7 @@ class PdfServiceToolsTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        service = new PdfService(new LoadProperties());
+        service = new PdfService(new LoadProperties(), new UploadValidator(new UploadProperties()));
         samplePdf = buildPdf(6);
         originalMaxPages = PdfDocuments.maxPages();
     }
@@ -91,10 +93,10 @@ class PdfServiceToolsTest {
     @Test
     @DisplayName("structural tools still produce valid PDFs")
     void structuralTools() throws Exception {
-        assertPdfWithPages(service.grayscalePdf(null, upload()), 6);
+        assertPdfWithPages(service.grayscalePdf(null, null, upload()), 6);
         assertPdfWithPages(service.compressPdf(null, CompressionLevel.RECOMMENDED, upload()), 6);
         assertPdfWithPages(service.optimizePdf(null, upload()), 6);
-        assertPdfWithPages(service.scalePdf(0.5d, upload()), 6);
+        assertPdfWithPages(service.scalePdf(0.5d, null, upload()), 6);
         assertPdfWithPages(service.mirrorPdf(null, null, upload()), 6);
         assertPdfWithPages(service.sanitizePdf(upload()), 6);
         assertPdfWithPages(service.removeMetadata(upload()), 6);
@@ -115,7 +117,7 @@ class PdfServiceToolsTest {
     @Test
     @DisplayName("extract-text recovers the text written into the document")
     void extractTextRoundTrips() throws Exception {
-        ResponseEntity<Resource> response = service.extractText(upload(), null);
+        ResponseEntity<Resource> response = service.extractText(upload(), null, null);
         assertProduced(response);
         String text = new String(response.getBody().getInputStream().readAllBytes());
         assertTrue(text.contains("Page 1 content"), "expected extracted text, got: " + text);
@@ -145,7 +147,7 @@ class PdfServiceToolsTest {
         // grayscale loads inside PdfTools, not through the service's open helper — this is exactly
         // the path that previously escaped the cap.
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.grayscalePdf(null, upload()));
+                () -> service.grayscalePdf(null, null, upload()));
         assertTrue(containsApiException(ex), "expected the page cap to surface, got: " + ex);
     }
 
@@ -190,7 +192,7 @@ class PdfServiceToolsTest {
         var notAnImage = new MockMultipartFile("files", "a.png", "image/png",
                 "this is not an image".getBytes());
         assertThrows(RuntimeException.class,
-                () -> service.imageToPdf(null, java.util.List.of(notAnImage)));
+                () -> service.imageToPdf(null, null, null, null, java.util.List.of(notAnImage)));
     }
 
     // ── Unlocking ─────────────────────────────────────────────────────────────

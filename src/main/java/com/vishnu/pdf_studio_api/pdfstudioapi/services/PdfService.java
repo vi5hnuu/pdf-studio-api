@@ -4,6 +4,7 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.RedactPdfRequest.Redac
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.ColorModel;
+import com.vishnu.pdf_studio_api.pdfstudioapi.model.Placement;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.RangeModel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.LoadProperties;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.DownloadResponse;
@@ -13,6 +14,7 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfDocuments;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.TempFiles;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.OfficeConvertTools;
+import com.vishnu.pdf_studio_api.pdfstudioapi.validation.UploadValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
@@ -45,6 +47,13 @@ import java.util.zip.ZipOutputStream;
 public class PdfService {
 
     private final LoadProperties loadProperties;
+
+    /**
+     * Also used outside the validation aspect, by tools that need to know <em>which</em> kind of
+     * artwork arrived rather than only that it was acceptable — stamping, which draws a PDF and an
+     * image by different routes.
+     */
+    private final UploadValidator uploadValidator;
 
     /**
      * Opens an upload as a temp-file-backed document.
@@ -192,14 +201,14 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> extractText(MultipartFile file, String outFileName) {
+    public ResponseEntity<Resource> extractText(MultipartFile file, String outFileName, List<Integer> pages) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "extracted-text";
 
         try (OpenPdf opened = openPdf(file)) {
             final PDDocument document = opened.document();
             if (document.isEncrypted()) throw new Exception("document is protected, please remove password first");
 
-            String text = PdfTools.extractText(document);
+            String text = PdfTools.extractText(document, pages);
             if (text.isBlank()) {
                 // A scanned PDF is images with no text layer. Returning an empty file with a
                 // 200 left the user to guess; this names the actual reason.
@@ -221,11 +230,11 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> grayscalePdf(String outFileName, MultipartFile file) {
+    public ResponseEntity<Resource> grayscalePdf(String outFileName, List<Integer> pages, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "grayscale-pdf";
 
         try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
-            final byte[] doc = PdfTools.grayscalePdf(upload.path());
+            final byte[] doc = PdfTools.grayscalePdf(upload.path(), pages);
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
@@ -239,11 +248,11 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> cropPdf(String outFileName, Float marginTop, Float marginBottom, Float marginLeft, Float marginRight, MultipartFile file) {
+    public ResponseEntity<Resource> cropPdf(String outFileName, Float marginTop, Float marginBottom, Float marginLeft, Float marginRight, Placement keep, Map<Integer, Placement> overrides, List<Integer> pages, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "cropped-pdf";
         try (OpenPdf opened = openPdf(file)) {
             final PDDocument document = opened.document();
-            final byte[] doc = PdfTools.cropPdf(document, marginTop, marginBottom, marginLeft, marginRight);
+            final byte[] doc = PdfTools.cropPdf(document, marginTop, marginBottom, marginLeft, marginRight, keep, overrides, pages);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
@@ -344,10 +353,19 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> stampPdf(String outFileName, Float opacity, Integer fromPage, Integer toPage, MultipartFile sourceFile, MultipartFile stampFile) {
+    /**
+     * Stamps a PDF with artwork that may itself be a PDF or an image.
+     *
+     * <p>The stamp's kind is read from its bytes rather than its filename, and decides both the
+     * temp file's extension and how the artwork is drawn.
+     */
+    public ResponseEntity<Resource> stampPdf(String outFileName, Float opacity, Integer fromPage, Integer toPage,
+                                             Placement placement, MultipartFile sourceFile, MultipartFile stampFile) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "stamped-pdf";
-        try (TempFiles.Handle source = TempFiles.of(sourceFile, ".pdf"); TempFiles.Handle stamp = TempFiles.of(stampFile, ".pdf")) {
-            final byte[] doc = PdfTools.stampPdf(source.path(), stamp.path(), opacity, fromPage, toPage);
+        ArtworkKind stampKind = uploadValidator.pdfOrImage(stampFile, "stamp");
+        String stampSuffix = stampKind == ArtworkKind.PDF ? ".pdf" : ".img";
+        try (TempFiles.Handle source = TempFiles.of(sourceFile, ".pdf"); TempFiles.Handle stamp = TempFiles.of(stampFile, stampSuffix)) {
+            final byte[] doc = PdfTools.stampPdf(source.path(), stamp.path(), stampKind, opacity, fromPage, toPage, placement);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
@@ -360,17 +378,15 @@ public class PdfService {
     }
 
     /**
-     * Places an image at a user-defined position and size on a single PDF page.
+     * Places an image at a user-defined position and size on one or more PDF pages.
      * Coordinates are fractions of page dimensions for device independence.
      */
-    public ResponseEntity<Resource> placeImage(String outFileName, int page,
-                                               float xFrac, float yFrac,
-                                               float widthFrac, float heightFrac,
+    public ResponseEntity<Resource> placeImage(String outFileName, List<Integer> pages,
+                                               Placement placement,
                                                MultipartFile pdfFile, MultipartFile imageFile) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "image-placed";
         try (TempFiles.Handle upload = TempFiles.of(pdfFile, ".pdf")) {
-            byte[] result = PdfTools.placeImage(upload.path(), imageFile.getBytes(),
-                    page, xFrac, yFrac, widthFrac, heightFrac);
+            byte[] result = PdfTools.placeImage(upload.path(), imageFile.getBytes(), pages, placement);
             ByteArrayResource baR = new ByteArrayResource(result);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(outFileName, "document", "pdf"));
@@ -504,20 +520,20 @@ public class PdfService {
     }
 
     /** Resizes every page to a standard size, scaling content to fit. */
-    public ResponseEntity<Resource> resizePage(com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageSizePreset size, MultipartFile file) {
+    public ResponseEntity<Resource> resizePage(com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageSizePreset size, List<Integer> pages, MultipartFile file) {
         if (size == null) size = com.vishnu.pdf_studio_api.pdfstudioapi.enums.PageSizePreset.A4;
         try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
-            return pdfResponse(PdfTools.resizePageSize(upload.path(), size.getWidth(), size.getHeight()), "resized");
+            return pdfResponse(PdfTools.resizePageSize(upload.path(), size.getWidth(), size.getHeight(), pages), "resized");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
 
     /** Scales page size and content uniformly by the given factor. */
-    public ResponseEntity<Resource> scalePdf(Double scale, MultipartFile file) {
+    public ResponseEntity<Resource> scalePdf(Double scale, List<Integer> pages, MultipartFile file) {
         float f = (scale == null || scale <= 0) ? 1f : scale.floatValue();
         try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
-            return pdfResponse(PdfTools.scalePdf(upload.path(), f), "scaled");
+            return pdfResponse(PdfTools.scalePdf(upload.path(), f, pages), "scaled");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -742,7 +758,7 @@ public class PdfService {
         return ResponseEntity.status(200).body(null);
     }
 
-    public ResponseEntity<Resource> pdfToJpg(MultipartFile file, String outFileName, Quality quality, Boolean single, Direction direction, Integer imageGap) {
+    public ResponseEntity<Resource> pdfToJpg(MultipartFile file, String outFileName, Quality quality, Boolean single, Direction direction, Integer imageGap, List<Integer> pages) {
         if (file == null) throw new IllegalArgumentException("pdf document is required");
 
         if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = file.getOriginalFilename();
@@ -755,7 +771,7 @@ public class PdfService {
             final PDDocument document = opened.document();
             if (document.isEncrypted()) throw new Exception("document is protected please remove password first");
 
-            byte[] imageBytes = PdfTools.pdfToImage(document, single, direction, quality, imageGap);
+            byte[] imageBytes = PdfTools.pdfToImage(document, single, direction, quality, imageGap, pages);
 
             ByteArrayResource baR = new ByteArrayResource(imageBytes);
 
@@ -774,12 +790,15 @@ public class PdfService {
         }
     }
 
-    public ResponseEntity<Resource> imageToPdf(String outFileName, List<MultipartFile> files) {
+    public ResponseEntity<Resource> imageToPdf(String outFileName, ImagePageSize pageSize,
+                                               PageOrientation orientation, Float marginPt,
+                                               List<MultipartFile> files) {
         if (files.isEmpty()) throw new IllegalArgumentException("files cannot be empty");
         if (outFileName == null ||  outFileName.isBlank() || outFileName.isEmpty()) outFileName = "images-pdf";
 
         try {
-            final byte[] doc = PdfTools.imagesToPdf(files);
+            final byte[] doc = PdfTools.imagesToPdf(files, pageSize, orientation,
+                    marginPt == null ? 0f : marginPt);
             ByteArrayResource baR = new ByteArrayResource(doc);
 
             HttpHeaders headers = new HttpHeaders();
