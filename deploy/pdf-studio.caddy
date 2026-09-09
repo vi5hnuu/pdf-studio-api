@@ -1,0 +1,5 @@
+# pdf-studio-api — imported by /etc/caddy/Caddyfile (both the legacy
+# pdf-craft.laxmi.solutions block and the new pdf-studio-api.laxmi.solutions
+# block share this snippet).
+encode zstd gzip
+reverse_proxy localhost:8082

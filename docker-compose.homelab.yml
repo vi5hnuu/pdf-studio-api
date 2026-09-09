@@ -1,0 +1,47 @@
+# Homelab compose (standalone — the base docker-compose.yml has a dev-only
+# nginx sidecar that Caddy replaces). Run only this file:
+#   docker compose -f docker-compose.homelab.yml <cmd>
+services:
+  pdf-studio-service:
+    image: pdf-studio-api:homelab
+    build:
+      context: .
+    env_file:
+      - /etc/pdf-studio/prod.env
+    ports:
+      - "127.0.0.1:8082:8082"   # Spring server.port=8082
+    depends_on:
+      pdf-studio-mysql:
+        condition: service_healthy
+    # host.docker.internal → host gateway so container can reach the host
+    # ls-auth on 127.0.0.1:8081 for JWKS without a DNS round-trip.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Application logs land on host at /var/log/pdf-studio-api/ so they survive
+    # container recreation and can be backed up / grepped from the host. Spring
+    # Boot's logback rolls the file per LOGGING_* env in /etc/pdf-studio/prod.env.
+    volumes:
+      - /var/log/pdf-studio-api:/app/logs
+    restart: unless-stopped
+    networks: [pdf-studio-network]
+
+  pdf-studio-mysql:
+    image: mysql:9.1.0
+    env_file:
+      - /etc/pdf-studio/prod.env
+    ports:
+      - "127.0.0.1:3309:3306"   # 3306-3308 taken by other services
+    volumes:
+      - /var/lib/pdf-studio/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+    networks: [pdf-studio-network]
+
+networks:
+  pdf-studio-network:
+    driver: bridge

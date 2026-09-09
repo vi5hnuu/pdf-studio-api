@@ -1,0 +1,17 @@
+[Unit]
+Description=pdf-studio-api (Spring Boot + MySQL via docker compose)
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/pdf-studio/prod.env
+WorkingDirectory=/home/kvi5hnu/Desktop/pdf-studio-api
+ExecStart=/usr/bin/docker compose -f docker-compose.homelab.yml up -d --wait --wait-timeout 180
+ExecStop=/usr/bin/docker compose -f docker-compose.homelab.yml down
+ExecReload=/usr/bin/docker compose -f docker-compose.homelab.yml up -d --wait --wait-timeout 180
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
