@@ -31,3 +31,6 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Google Play service-account credentials — bind-mounted into the container, never committed.
+pdf-craft-*.json
