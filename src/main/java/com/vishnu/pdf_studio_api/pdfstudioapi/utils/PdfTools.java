@@ -1869,14 +1869,17 @@ public class PdfTools {
     /**
      * Builds On + Off normal appearance streams for a checkbox/radio widget so it
      * renders and toggles in any viewer (not just ones that honour NeedAppearances).
-     * ZapfDingbats "4" = check, "l" = filled circle.
+     *
+     * <p>The tick and the dot are drawn as paths rather than set as ZapfDingbats text. The
+     * conventional trick — showing "4" or "l" in ZapfDingbats — asks PDFBox to map the
+     * *Unicode* characters '4' and 'l' through ZapfDingbatsEncoding, where they have no glyph,
+     * so every checkbox threw "U+0034 ('.notdef') is not available in the font ZapfDingbats"
+     * and took the whole create-form request down with it. Paths also render identically in
+     * viewers that substitute fonts.
      */
     private static void buildToggleAppearance(PDDocument doc, PDAnnotationWidget widget, String onState, boolean radio, boolean on) throws IOException {
         PDRectangle r = widget.getRectangle();
         float w = r.getWidth(), h = r.getHeight();
-        PDFont zapf = new PDType1Font(Standard14Fonts.FontName.ZAPF_DINGBATS);
-        float fontSize = Math.max(4f, Math.min(w, h) * 0.8f);
-        String glyph = radio ? "l" : "4";
 
         // Visible border/box.
         PDBorderStyleDictionary bs = new PDBorderStyleDictionary();
@@ -1886,8 +1889,8 @@ public class PdfTools {
         PDAppearanceCharacteristicsDictionary mk = new PDAppearanceCharacteristicsDictionary(new COSDictionary());
         widget.getCOSObject().setItem(COSName.MK, mk.getCOSObject());
 
-        PDAppearanceStream onAp = buildToggleStream(doc, w, h, radio, glyph, zapf, fontSize, true);
-        PDAppearanceStream offAp = buildToggleStream(doc, w, h, radio, glyph, zapf, fontSize, false);
+        PDAppearanceStream onAp = buildToggleStream(doc, w, h, radio, true);
+        PDAppearanceStream offAp = buildToggleStream(doc, w, h, radio, false);
 
         PDAppearanceDictionary ap = new PDAppearanceDictionary();
         COSDictionary normal = new COSDictionary();
@@ -1898,7 +1901,7 @@ public class PdfTools {
         widget.getCOSObject().setName(COSName.AS, on ? onState : "Off");
     }
 
-    private static PDAppearanceStream buildToggleStream(PDDocument doc, float w, float h, boolean radio, String glyph, PDFont zapf, float fontSize, boolean drawGlyph) throws IOException {
+    private static PDAppearanceStream buildToggleStream(PDDocument doc, float w, float h, boolean radio, boolean drawGlyph) throws IOException {
         PDAppearanceStream ap = new PDAppearanceStream(doc);
         ap.setResources(new PDResources());
         ap.setBBox(new PDRectangle(w, h));
@@ -1912,12 +1915,21 @@ public class PdfTools {
                 cs.stroke();
             }
             if (drawGlyph) {
-                float tw = zapf.getStringWidth(glyph) / 1000f * fontSize;
-                cs.beginText();
-                cs.setFont(zapf, fontSize);
-                cs.newLineAtOffset((w - tw) / 2f, (h - fontSize) / 2f + fontSize * 0.18f);
-                cs.showText(glyph);
-                cs.endText();
+                final float cx = w / 2f, cy = h / 2f, side = Math.min(w, h);
+                if (radio) {
+                    // Filled dot, sized so it never touches the ring around it.
+                    addCircle(cs, cx, cy, side * 0.22f);
+                    cs.fill();
+                } else {
+                    // Tick: a short down-stroke into a longer up-stroke, inset from the border.
+                    cs.setLineWidth(Math.max(0.8f, side * 0.12f));
+                    cs.setLineCapStyle(1);   // round, so the corner reads as a tick not a wedge
+                    cs.setLineJoinStyle(1);
+                    cs.moveTo(cx - side * 0.24f, cy + side * 0.02f);
+                    cs.lineTo(cx - side * 0.06f, cy - side * 0.17f);
+                    cs.lineTo(cx + side * 0.26f, cy + side * 0.21f);
+                    cs.stroke();
+                }
             }
         }
         return ap;
