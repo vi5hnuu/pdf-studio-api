@@ -24,6 +24,8 @@ import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.pdfbox.pdmodel.font.PDFontDescriptor;
 import org.apache.pdfbox.pdmodel.common.filespecification.PDComplexFileSpecification;
 import org.apache.pdfbox.pdmodel.common.filespecification.PDEmbeddedFile;
+import org.apache.pdfbox.pdmodel.interactive.action.PDActionJavaScript;
+import org.apache.pdfbox.pdmodel.interactive.action.PDFormFieldAdditionalActions;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.apache.pdfbox.pdmodel.interactive.form.PDField;
 import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
@@ -1770,6 +1772,10 @@ public class PdfTools {
                 }
             }
 
+            // Calculation order: a reader runs calculations in the order named by /CO, so a
+            // total that depends on a subtotal has to come after it.
+            List<PDField> calculationOrder = new ArrayList<>();
+
             int auto = 0;
             for (FormFieldSpec f : singles) {
                 String type = f.getType() == null ? "text" : f.getType().toLowerCase();
@@ -1809,18 +1815,33 @@ public class PdfTools {
                         placeWidget(sig, page, rect);
                         break;
                     }
-                    default: { // text, multiline, date
+                    case "listbox": {
+                        PDListBox list = new PDListBox(acro);
+                        list.setPartialName(name);
+                        acro.getFields().add(list);
+                        if (f.getOptions() != null && !f.getOptions().isEmpty()) list.setOptions(f.getOptions());
+                        list.setMultiSelect(Boolean.TRUE.equals(f.getMultiSelect()));
+                        placeWidget(list, page, rect);
+                        if (Boolean.TRUE.equals(f.getRequired())) list.setRequired(true);
+                        if (f.getValue() != null && !f.getValue().isBlank()) {
+                            try { list.setValue(f.getValue()); } catch (Exception ignore) {}
+                        }
+                        break;
+                    }
+                    default: { // text, multiline, date, number, email, phone
                         PDTextField tf = new PDTextField(acro);
                         tf.setPartialName(name);
                         acro.getFields().add(tf);
                         if ("multiline".equals(type)) tf.setMultiline(true);
                         float fs = f.getFontSize() == null ? 0f : f.getFontSize();
                         tf.setDefaultAppearance("/Helv " + fs + " Tf 0 g");
+                        applyTextTraits(tf, f, "multiline".equals(type));
                         placeWidget(tf, page, rect);
                         if (Boolean.TRUE.equals(f.getRequired())) tf.setRequired(true);
                         if (f.getValue() != null && !f.getValue().isBlank()) {
                             try { tf.setValue(f.getValue()); } catch (Exception ignore) {}
                         }
+                        applyFieldActions(doc, tf, f);
                     }
                 }
             }
@@ -1864,6 +1885,78 @@ public class PdfTools {
             doc.save(baos, CompressParameters.NO_COMPRESSION);
             return baos.toByteArray();
         }
+    }
+
+    /**
+     * Applies the presentation traits a text field can carry: tooltip, read-only, character
+     * cap, comb cells and justification.
+     *
+     * <p>Comb is only set when the spec actually permits it — with a MaxLen and not on a
+     * multiline field — because a comb flag without a length makes readers draw nothing.
+     */
+    private static void applyTextTraits(PDTextField tf, FormFieldSpec f, boolean multiline) throws IOException {
+        if (f.getTooltip() != null && !f.getTooltip().isBlank()) {
+            tf.getCOSObject().setString(COSName.TU, f.getTooltip());
+        }
+        if (Boolean.TRUE.equals(f.getReadOnly())) tf.setReadOnly(true);
+        if (f.getMaxLength() != null && f.getMaxLength() > 0) {
+            tf.setMaxLen(f.getMaxLength());
+            if (Boolean.TRUE.equals(f.getComb()) && !multiline) tf.setComb(true);
+        }
+        if (f.getAlignment() != null && f.getAlignment() >= 0 && f.getAlignment() <= 2) {
+            tf.setQ(f.getAlignment());
+        }
+    }
+
+    /**
+     * Writes the field's format, validation and calculation rules into the document as
+     * JavaScript additional-actions.
+     *
+     * <p>Best effort on purpose: desktop readers honour these, most mobile ones ignore script
+     * entirely. The app evaluates the same rules itself, so the document is never the only
+     * thing enforcing them — this simply means a form opened on a laptop behaves the way its
+     * author designed it.
+     */
+    private static void applyFieldActions(PDDocument doc, PDTextField tf, FormFieldSpec f) {
+        String format = f.getFormat() == null ? "" : f.getFormat();
+        String keystroke = null, formatScript = null;
+        if ("number".equals(format)) {
+            // nDec, sepStyle, negStyle, currStyle, strCurrency, bCurrencyPrepend
+            keystroke = "AFNumber_Keystroke(2,0,0,0,\"\",true);";
+            formatScript = "AFNumber_Format(2,0,0,0,\"\",true);";
+        }
+
+        String validate = null;
+        if (f.getValidationPattern() != null && !f.getValidationPattern().isBlank()) {
+            String pattern = f.getValidationPattern().replace("\\", "\\\\").replace("\"", "\\\"");
+            validate = "if (event.value && !(new RegExp(\"" + pattern + "\").test(event.value))) {"
+                    + " app.alert(\"That value is not in the expected format.\"); event.rc = false; }";
+        }
+
+        String calculate = null;
+        FormFieldSpec.CalculationSpec calc = f.getCalculation();
+        if (calc != null && calc.getFields() != null && !calc.getFields().isEmpty()) {
+            StringBuilder names = new StringBuilder();
+            for (String n : calc.getFields()) {
+                if (names.length() > 0) names.append(", ");
+                names.append('"').append(n.replace("\"", "")).append('"');
+            }
+            String fn = calc.getFunction() == null ? "SUM" : calc.getFunction();
+            calculate = "AFSimple_Calculate(\"" + fn + "\", new Array(" + names + "));";
+        }
+
+        if (keystroke == null && formatScript == null && validate == null && calculate == null) return;
+
+        PDFormFieldAdditionalActions actions = new PDFormFieldAdditionalActions();
+        if (keystroke != null) actions.setK(javascript(doc, keystroke));
+        if (formatScript != null) actions.setF(javascript(doc, formatScript));
+        if (validate != null) actions.setV(javascript(doc, validate));
+        if (calculate != null) actions.setC(javascript(doc, calculate));
+        tf.setActions(actions);
+    }
+
+    private static PDActionJavaScript javascript(PDDocument doc, String source) {
+        return new PDActionJavaScript(source);
     }
 
     /**

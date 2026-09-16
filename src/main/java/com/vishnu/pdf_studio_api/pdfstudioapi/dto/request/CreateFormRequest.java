@@ -41,5 +41,36 @@ public class CreateFormRequest {
         private Float fontSize;        // text font size (0 = auto)
         private Boolean required;
         private Boolean checked;       // checkbox / radio: on by default
+
+        // ── Rich properties (all optional, so older clients keep working) ──────────────
+        private String tooltip;          // /TU help text
+        private Boolean readOnly;        // filled in already, not editable
+        private Integer maxLength;       // /MaxLen character cap
+        private Boolean comb;            // divide the box into maxLength cells
+        private Integer alignment;       // /Q quadding: 0 left, 1 centre, 2 right
+        private Boolean multiSelect;     // list box accepting more than one choice
+        private String format;           // number | email | phone | date — drives format actions
+        private String validationPattern; // regex the value must match
+        private Condition condition;      // show only when another field matches
+        private CalculationSpec calculation; // value derived from other fields
+
+        @Getter
+        @Setter
+        @NoArgsConstructor
+        @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+        public static class Condition {
+            private String parentField;
+            private String operator; // equals | notEquals | contains | isEmpty | ...
+            private String value;
+        }
+
+        @Getter
+        @Setter
+        @NoArgsConstructor
+        @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+        public static class CalculationSpec {
+            private String function;      // SUM | AVG | PRD | MIN | MAX
+            private List<String> fields;
+        }
     }
 }
