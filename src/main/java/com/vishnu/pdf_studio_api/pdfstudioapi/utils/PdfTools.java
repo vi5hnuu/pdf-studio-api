@@ -29,6 +29,8 @@ import org.apache.pdfbox.pdmodel.interactive.action.PDFormFieldAdditionalActions
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.apache.pdfbox.pdmodel.interactive.form.PDField;
 import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
+import org.apache.pdfbox.pdmodel.graphics.color.PDColor;
+import org.apache.pdfbox.pdmodel.graphics.color.PDDeviceRGB;
 import org.apache.pdfbox.pdmodel.interactive.form.PDCheckBox;
 import org.apache.pdfbox.pdmodel.interactive.form.PDComboBox;
 import org.apache.pdfbox.pdmodel.interactive.form.PDListBox;
@@ -2121,7 +2123,30 @@ public class PdfTools {
         w.setRectangle(rect);
         w.setPage(page);
         w.setPrinted(true);
+        // An empty text field carried no border or background, so in any reader that does not
+        // synthesise one it was completely invisible — the person filling the form could not
+        // see where to type. Toggles draw their own box in buildToggleAppearance; everything
+        // else gets a light outline and tint here.
+        if (!(field instanceof PDCheckBox) && !(field instanceof PDRadioButton)) {
+            styleDataEntryWidget(w);
+        }
         page.getAnnotations().add(w);
+    }
+
+    /** Gives a data-entry widget a visible outline and a faint fill. */
+    private static void styleDataEntryWidget(PDAnnotationWidget w) {
+        PDBorderStyleDictionary border = new PDBorderStyleDictionary();
+        border.setWidth(1);
+        border.setStyle(PDBorderStyleDictionary.STYLE_SOLID);
+        w.setBorderStyle(border);
+
+        PDAppearanceCharacteristicsDictionary mk =
+                new PDAppearanceCharacteristicsDictionary(new COSDictionary());
+        // Mid grey outline, very light grey fill: visible on white paper without competing
+        // with the document's own content once printed.
+        mk.setBorderColour(new PDColor(new float[]{0.45f, 0.45f, 0.45f}, PDDeviceRGB.INSTANCE));
+        mk.setBackground(new PDColor(new float[]{0.96f, 0.96f, 0.96f}, PDDeviceRGB.INSTANCE));
+        w.setAppearanceCharacteristics(mk);
     }
 
     /**

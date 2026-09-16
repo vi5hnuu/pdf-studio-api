@@ -190,6 +190,27 @@ class CreateFormTest {
     }
 
     @Test
+    void dataEntryFieldsAreVisibleWithoutAReaderSynthesisingThem() throws Exception {
+        // Without a border and background an empty text field is invisible in readers that
+        // ignore NeedAppearances — the person filling the form cannot see where to type.
+        Path pdf = onePagePdf();
+        try {
+            byte[] out = PdfTools.createForm(pdf, List.of(spec("text", "who", 200)));
+            try (PDDocument doc = Loader.loadPDF(out)) {
+                var widget = doc.getDocumentCatalog().getAcroForm()
+                        .getField("who").getWidgets().get(0);
+                assertNotNull(widget.getBorderStyle(), "the field needs a border style");
+                var mk = widget.getAppearanceCharacteristics();
+                assertNotNull(mk, "the field needs appearance characteristics");
+                assertNotNull(mk.getBorderColour(), "and a visible outline");
+                assertNotNull(mk.getBackground(), "and a background tint");
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
     void radioOptionsSharingAGroupBecomeOneField() throws Exception {
         Path pdf = onePagePdf();
         try {
