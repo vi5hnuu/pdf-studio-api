@@ -20,8 +20,17 @@ services:
     # Application logs land on host at /var/log/pdf-studio-api/ so they survive
     # container recreation and can be backed up / grepped from the host. Spring
     # Boot's logback rolls the file per LOGGING_* env in /etc/pdf-studio/prod.env.
+    #
+    # Google Play service-account credentials live next to the compose file on
+    # host (repo root, gitignored) and are bind-mounted read-only at a fixed
+    # path inside the container. PLAY_SERVICE_ACCOUNT_KEY_PATH in
+    # /etc/pdf-studio/prod.env must point at that in-container path so
+    # PlayStoreVerifier can construct the AndroidPublisher client. Path is
+    # deliberately outside /app so a `docker image inspect` diff never
+    # shows credentials in a layer.
     volumes:
       - /var/log/pdf-studio-api:/app/logs
+      - ./pdf-craft-496203-bea59af63c2d.json:/run/secrets/play-service-account.json:ro
     restart: unless-stopped
     networks: [pdf-studio-network]
 
