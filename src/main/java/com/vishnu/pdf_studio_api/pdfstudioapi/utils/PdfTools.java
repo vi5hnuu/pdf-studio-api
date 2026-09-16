@@ -72,8 +72,10 @@ import org.apache.pdfbox.io.RandomAccessReadBuffer;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.List;
 import java.util.function.IntPredicate;
@@ -2222,12 +2224,30 @@ public class PdfTools {
         merger.setDocumentMergeMode(PDFMergerUtility.DocumentMergeMode.OPTIMIZE_RESOURCES_MODE);
         merger.setAcroFormMergeMode(PDFMergerUtility.AcroFormMergeMode.JOIN_FORM_FIELDS_MODE);
 
+        final List<File> tempFiles = new ArrayList<>();
         for (MultipartFile file : files) {
-            final File tempFile = File.createTempFile(file.getName(), ".pdf");
-            file.transferTo(tempFile);
+            final File tempFile = File.createTempFile("merge-", ".pdf");
+            // transferTo() moves the spooled part, and a move will not overwrite, so the file
+            // createTempFile just made has to be removed first (see TempFiles.of).
+            Files.deleteIfExists(tempFile.toPath());
+            try {
+                file.transferTo(tempFile);
+            } catch (IllegalStateException | IOException moveUnavailable) {
+                try (InputStream in = file.getInputStream()) {
+                    Files.copy(in, tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+            tempFiles.add(tempFile);
             merger.addSource(tempFile);
         }
-        merger.mergeDocuments(null);
+        try {
+            merger.mergeDocuments(null);
+        } finally {
+            // Previously every merge left one temp file per input behind for the OS to reap.
+            for (File t : tempFiles) {
+                try { Files.deleteIfExists(t.toPath()); } catch (IOException ignored) { /* best effort */ }
+            }
+        }
 
         final byte[] bytes = outputStream.toByteArray();
         outputStream.close();

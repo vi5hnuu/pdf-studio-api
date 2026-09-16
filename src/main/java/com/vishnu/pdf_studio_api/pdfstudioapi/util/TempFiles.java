@@ -37,14 +37,26 @@ public final class TempFiles {
     public static Handle of(MultipartFile file, String suffix) throws IOException {
         Path path = Files.createTempFile(PREFIX, suffix);
         try {
-            // transferTo may move the underlying part; if it has already been read it falls back to
-            // a stream copy, so handle both.
+            // spring.servlet.multipart.file-size-threshold is 0, so every part is already spooled
+            // to disk and transferTo() is a *move*. A move refuses to overwrite, and
+            // createTempFile has just created the destination — so the placeholder has to go
+            // first, or every upload fails with FileExistsException. That surfaced as a 422
+            // "This file could not be read", which read like a corrupt document rather than a
+            // server bug, for every PDF tool.
+            Files.deleteIfExists(path);
             try {
                 file.transferTo(path.toFile());
-            } catch (IllegalStateException alreadyMoved) {
+            } catch (IllegalStateException | IOException moveUnavailable) {
+                // The part was already consumed, or the move could not be used (different
+                // filesystem, destination recreated by another process). Copying always works.
                 try (InputStream in = file.getInputStream()) {
                     Files.copy(in, path, StandardCopyOption.REPLACE_EXISTING);
                 }
+            }
+            // transferTo() is not required to leave the file where we asked on every container,
+            // so fail loudly here rather than handing a tool an empty path to parse.
+            if (!Files.exists(path) || Files.size(path) == 0) {
+                throw new IOException("Upload could not be materialised at " + path);
             }
             return new Handle(path);
         } catch (IOException | RuntimeException e) {
