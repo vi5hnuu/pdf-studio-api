@@ -32,8 +32,14 @@ public class CreditsController {
 
     @GetMapping("/balance")
     public ResponseEntity<Map<String, Object>> balance(HttpServletRequest request) {
-        int balance = creditsService.getBalance(CurrentUser.requireId(), ClientIp.of(request));
-        return ResponseEntity.ok(Map.of("success", true, "data", Map.of("credits", balance)));
+        String userId = CurrentUser.requireId();
+        String ip = ClientIp.of(request);
+        int balance = creditsService.getBalance(userId, ip);
+        // Ad-free rides along on the call the app already makes every launch, so the client
+        // never has to trust its own cached copy while it is online.
+        boolean adFree = creditsService.isAdFree(userId, ip);
+        return ResponseEntity.ok(Map.of("success", true,
+                "data", Map.of("credits", balance, "ad_free", adFree)));
     }
 
     /** Full tool price list for the UI (0 = free). */

@@ -40,6 +40,16 @@ public class CreditAccount {
     @Column(name = "last_daily_claim_date")
     private LocalDate lastDailyClaimDate;
 
+    /**
+     * Ad-free entitlement, owned by the server.
+     *
+     * <p>The app used to hold this as a local preference, which meant anyone could switch the
+     * ads off by editing shared preferences. The client may now cache it for offline use but
+     * never decide it: only a verified purchase writes here.
+     */
+    @Column(nullable = false)
+    private boolean adFree = false;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

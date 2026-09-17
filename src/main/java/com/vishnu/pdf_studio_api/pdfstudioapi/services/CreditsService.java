@@ -65,6 +65,11 @@ public class CreditsService {
         return accountService.ensure(userId, ip).getBalance();
     }
 
+    /** Server-owned ad-free entitlement. The client caches this but never sets it. */
+    public boolean isAdFree(String userId, String ip) {
+        return accountService.ensure(userId, ip).isAdFree();
+    }
+
     public List<ToolCreditCost> listCosts() {
         return costRepository.findByActiveTrueOrderByToolIdAsc();
     }
