@@ -1846,6 +1846,7 @@ public class PdfTools {
                         applyFieldActions(doc, tf, f);
                     }
                 }
+                drawFieldLabel(doc, f, page, rect);
             }
 
             for (Map.Entry<String, List<FormFieldSpec>> e : radioGroups.entrySet()) {
@@ -1871,6 +1872,8 @@ public class PdfTools {
                     w.getCOSObject().setItem(COSName.PARENT, radio.getCOSObject());
                     page.getAnnotations().add(w);
                     buildToggleAppearance(doc, w, onState, true, on);
+                    // Per option, not per group: "Savings" belongs beside its own circle.
+                    drawFieldLabel(doc, f, page, w.getRectangle());
 
                     widgets.add(w);
                     exports.add(onState);
@@ -2118,6 +2121,73 @@ public class PdfTools {
     }
 
     // Converts a top-left-origin rect (PDF points) to a PDFBox bottom-left rect.
+    /** Default caption size, matched by the editor's canvas preview. */
+    private static final float LABEL_DEFAULT_SIZE = 9f;
+    /** Gap between the widget and its caption, in points. Also matched by the editor. */
+    private static final float LABEL_GAP = 4f;
+
+    /**
+     * Draws a field's visible caption onto the page, as real page content.
+     *
+     * <p>Static text rather than an annotation, so it prints, survives flattening and shows in
+     * every reader. {@code /TU} does none of those things: it is hover help, invisible on paper
+     * and ignored by most mobile readers, which left a radio group as three identical circles
+     * with nothing to say which was which.
+     *
+     * <p>A toggle's caption sits to its right, vertically centred on it, because that is how
+     * printed forms set them out; everything else gets its caption above the box. Silently does
+     * nothing when there is no label — the common case, where the document prints its own.
+     */
+    private static void drawFieldLabel(PDDocument doc, FormFieldSpec f, PDPage page, PDRectangle rect)
+            throws IOException {
+        String label = f.getLabel();
+        if (label == null || label.isBlank()) return;
+
+        float size = (f.getLabelSize() == null || f.getLabelSize() <= 0)
+                ? LABEL_DEFAULT_SIZE : f.getLabelSize();
+        PDFont font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
+        // Standard14 fonts are WinAnsi; anything outside it would throw mid-write and lose the
+        // whole document, so unsupported characters are dropped rather than taking the page down.
+        String text = toWinAnsi(label);
+        if (text.isBlank()) return;
+
+        boolean toggle = "checkbox".equalsIgnoreCase(f.getType()) || "radio".equalsIgnoreCase(f.getType());
+        float x, y;
+        if (toggle) {
+            x = rect.getLowerLeftX() + rect.getWidth() + LABEL_GAP;
+            // Centre the cap height on the widget rather than the baseline, which would sit low.
+            y = rect.getLowerLeftY() + (rect.getHeight() - size * 0.7f) / 2f;
+        } else {
+            x = rect.getLowerLeftX();
+            y = rect.getUpperRightY() + LABEL_GAP;
+        }
+        // Keep it on the page: a caption pushed past the top or the right edge is simply lost.
+        float maxY = page.getMediaBox().getHeight() - size;
+        if (y > maxY) y = maxY;
+        if (y < 0) y = 0;
+        if (x < 0) x = 0;
+
+        try (PDPageContentStream cs = new PDPageContentStream(
+                doc, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+            cs.beginText();
+            cs.setFont(font, size);
+            cs.setNonStrokingColor(0f, 0f, 0f);
+            cs.newLineAtOffset(x, y);
+            cs.showText(text);
+            cs.endText();
+        }
+    }
+
+    /** Drops characters the Standard-14 WinAnsi encoding cannot represent. */
+    private static String toWinAnsi(String s) {
+        StringBuilder out = new StringBuilder(s.length());
+        for (char c : s.toCharArray()) {
+            if (c >= 32 && c <= 126) out.append(c);
+            else if (c >= 160 && c <= 255) out.append(c);
+        }
+        return out.toString().trim();
+    }
+
     private static PDRectangle toRect(FormFieldSpec f, PDPage page) {
         float ph = page.getMediaBox().getHeight();
         float pdfY = ph - f.getY() - f.getHeight();

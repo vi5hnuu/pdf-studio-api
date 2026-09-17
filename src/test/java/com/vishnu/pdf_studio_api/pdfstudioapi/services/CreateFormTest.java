@@ -49,6 +49,58 @@ class CreateFormTest {
     }
 
     @Test
+    void drawsEachRadioOptionsLabelOntoThePage() throws Exception {
+        // Before this, a radio group in the output was three identical circles with nothing to
+        // say which was "Savings" and which was "Current": the spec had no label at all, and
+        // /TU (tooltip) is hover help that never reaches paper.
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec savings = spec("radio", "account_type", 200);
+            savings.setExportValue("savings");
+            savings.setWidth(12);
+            savings.setHeight(12);
+            savings.setLabel("Savings");
+
+            FormFieldSpec current = spec("radio", "account_type", 230);
+            current.setExportValue("current");
+            current.setWidth(12);
+            current.setHeight(12);
+            current.setLabel("Current");
+
+            byte[] out = PdfTools.createForm(pdf, List.of(savings, current));
+            try (PDDocument doc = Loader.loadPDF(out)) {
+                String text = new org.apache.pdfbox.text.PDFTextStripper().getText(doc);
+                assertTrue(text.contains("Savings"), "the first option's label must be on the page");
+                assertTrue(text.contains("Current"), "the second option's label must be on the page");
+
+                // Still one radio field with both options, not two fields.
+                PDAcroForm acro = doc.getDocumentCatalog().getAcroForm();
+                PDField field = acro.getField("account_type");
+                assertInstanceOf(PDRadioButton.class, field);
+                assertEquals(2, field.getWidgets().size());
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
+    void aFieldWithNoLabelDrawsNothingExtra() throws Exception {
+        // The common case: the document already prints its own labels, so the tool must not
+        // stamp anything onto it.
+        Path pdf = onePagePdf();
+        try {
+            byte[] out = PdfTools.createForm(pdf, List.of(spec("text", "plain", 200)));
+            try (PDDocument doc = Loader.loadPDF(out)) {
+                String text = new org.apache.pdfbox.text.PDFTextStripper().getText(doc);
+                assertTrue(text.isBlank(), "expected no page text, got: " + text);
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
     void buildsEveryFieldTypeTheEditorCanPlace() throws Exception {
         Path pdf = onePagePdf();
         try {

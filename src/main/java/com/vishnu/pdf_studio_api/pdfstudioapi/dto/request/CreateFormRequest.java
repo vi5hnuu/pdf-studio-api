@@ -43,6 +43,13 @@ public class CreateFormRequest {
         private Boolean checked;       // checkbox / radio: on by default
 
         // ── Rich properties (all optional, so older clients keep working) ──────────────
+        // A caption drawn on the page beside the widget. Not the same as `tooltip` below, which
+        // is /TU: hover help that never appears on paper and that most mobile readers do not
+        // show at all. A radio group's options are otherwise three identical circles in the
+        // output with nothing to say which is "Savings" and which is "Current".
+        private String label;
+        private Float labelSize;         // point size for the caption; null/0 uses the default
+
         private String tooltip;          // /TU help text
         private Boolean readOnly;        // filled in already, not editable
         private Integer maxLength;       // /MaxLen character cap
