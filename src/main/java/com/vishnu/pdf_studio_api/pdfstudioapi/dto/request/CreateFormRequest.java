@@ -51,6 +51,7 @@ public class CreateFormRequest {
         private Boolean multiSelect;     // list box accepting more than one choice
         private String format;           // number | email | phone | date — drives format actions
         private String validationPattern; // regex the value must match
+        private String dateFormat;        // dd/mm/yyyy | mm/dd/yyyy | yyyy-mm-dd
         private Condition condition;      // show only when another field matches
         private CalculationSpec calculation; // value derived from other fields
 

@@ -211,6 +211,27 @@ class CreateFormTest {
     }
 
     @Test
+    void writesADateFormatActionSoADateFieldIsNotJustATextBox() throws Exception {
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec date = spec("date", "signed_on", 200);
+            date.setFormat("date");
+            date.setDateFormat("dd/mm/yyyy");
+
+            byte[] out = PdfTools.createForm(pdf, List.of(date));
+            try (PDDocument doc = Loader.loadPDF(out)) {
+                PDTextField tf = (PDTextField) doc.getDocumentCatalog().getAcroForm().getField("signed_on");
+                var actions = tf.getActions();
+                assertNotNull(actions, "a date field should carry format actions");
+                assertNotNull(actions.getF(), "a format action");
+                assertNotNull(actions.getK(), "a keystroke action");
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
     void radioOptionsSharingAGroupBecomeOneField() throws Exception {
         Path pdf = onePagePdf();
         try {

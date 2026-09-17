@@ -1922,7 +1922,14 @@ public class PdfTools {
     private static void applyFieldActions(PDDocument doc, PDTextField tf, FormFieldSpec f) {
         String format = f.getFormat() == null ? "" : f.getFormat();
         String keystroke = null, formatScript = null;
-        if ("number".equals(format)) {
+        if ("date".equals(format) || (f.getDateFormat() != null && !f.getDateFormat().isBlank())) {
+            // A date field was previously just a text box, so every filler typed a different
+            // shape of date. AFDate_* gives the reader a picker and a consistent format.
+            String mask = f.getDateFormat() == null || f.getDateFormat().isBlank()
+                    ? "dd/mm/yyyy" : f.getDateFormat();
+            keystroke = "AFDate_KeystrokeEx(\"" + mask + "\");";
+            formatScript = "AFDate_FormatEx(\"" + mask + "\");";
+        } else if ("number".equals(format)) {
             // nDec, sepStyle, negStyle, currStyle, strCurrency, bCurrencyPrepend
             keystroke = "AFNumber_Keystroke(2,0,0,0,\"\",true);";
             formatScript = "AFNumber_Format(2,0,0,0,\"\",true);";
