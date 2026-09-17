@@ -2151,20 +2151,37 @@ public class PdfTools {
         String text = toWinAnsi(label);
         if (text.isBlank()) return;
 
-        boolean toggle = "checkbox".equalsIgnoreCase(f.getType()) || "radio".equalsIgnoreCase(f.getType());
+        // Where the caption goes is the author's choice; "right" is the default because that is
+        // how a printed form sets out a checkbox.
+        String where = f.getLabelPosition() == null ? "right" : f.getLabelPosition().toLowerCase();
+        float textWidth = font.getStringWidth(text) / 1000f * size;
+        // Centre the cap height on the widget rather than the baseline, which would sit low.
+        float centredY = rect.getLowerLeftY() + (rect.getHeight() - size * 0.7f) / 2f;
         float x, y;
-        if (toggle) {
-            x = rect.getLowerLeftX() + rect.getWidth() + LABEL_GAP;
-            // Centre the cap height on the widget rather than the baseline, which would sit low.
-            y = rect.getLowerLeftY() + (rect.getHeight() - size * 0.7f) / 2f;
-        } else {
-            x = rect.getLowerLeftX();
-            y = rect.getUpperRightY() + LABEL_GAP;
+        switch (where) {
+            case "left" -> {
+                x = rect.getLowerLeftX() - LABEL_GAP - textWidth;
+                y = centredY;
+            }
+            case "above" -> {
+                x = rect.getLowerLeftX();
+                y = rect.getUpperRightY() + LABEL_GAP;
+            }
+            case "below" -> {
+                x = rect.getLowerLeftX();
+                y = rect.getLowerLeftY() - LABEL_GAP - size * 0.7f;
+            }
+            default -> {
+                x = rect.getLowerLeftX() + rect.getWidth() + LABEL_GAP;
+                y = centredY;
+            }
         }
-        // Keep it on the page: a caption pushed past the top or the right edge is simply lost.
+        // Keep it on the page: a caption pushed past any edge is simply lost.
         float maxY = page.getMediaBox().getHeight() - size;
+        float maxX = Math.max(0, page.getMediaBox().getWidth() - textWidth);
         if (y > maxY) y = maxY;
         if (y < 0) y = 0;
+        if (x > maxX) x = maxX;
         if (x < 0) x = 0;
 
         try (PDPageContentStream cs = new PDPageContentStream(

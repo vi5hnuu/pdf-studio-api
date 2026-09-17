@@ -49,6 +49,7 @@ public class CreateFormRequest {
         // output with nothing to say which is "Savings" and which is "Current".
         private String label;
         private Float labelSize;         // point size for the caption; null/0 uses the default
+        private String labelPosition;    // right | left | above | below (default right)
 
         private String tooltip;          // /TU help text
         private Boolean readOnly;        // filled in already, not editable

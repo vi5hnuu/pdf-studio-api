@@ -85,6 +85,53 @@ class CreateFormTest {
     }
 
     @Test
+    void labelPositionMovesTheCaptionToTheChosenSide() throws Exception {
+        // Four presets rather than free coordinates: the caption is always attached to its
+        // field, and the author picks the side that suits the form.
+        for (String side : new String[]{"right", "left", "above", "below"}) {
+            Path pdf = onePagePdf();
+            try {
+                FormFieldSpec box = spec("checkbox", "agree_" + side, 300);
+                box.setWidth(18);
+                box.setHeight(18);
+                box.setLabel("Agree");
+                box.setLabelPosition(side);
+
+                byte[] out = PdfTools.createForm(pdf, List.of(box));
+                try (PDDocument doc = Loader.loadPDF(out)) {
+                    assertTrue(new org.apache.pdfbox.text.PDFTextStripper().getText(doc).contains("Agree"),
+                            "caption must be drawn for position " + side);
+                }
+            } finally {
+                Files.deleteIfExists(pdf);
+            }
+        }
+    }
+
+    @Test
+    void aCaptionNeverRunsOffThePage() throws Exception {
+        // A left-positioned caption on a field at the very left edge would be drawn at a
+        // negative X and simply vanish.
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec box = spec("checkbox", "edge", 300);
+            box.setX(0);
+            box.setWidth(18);
+            box.setHeight(18);
+            box.setLabel("A long caption pushed off the left edge");
+            box.setLabelPosition("left");
+
+            byte[] out = PdfTools.createForm(pdf, List.of(box));
+            try (PDDocument doc = Loader.loadPDF(out)) {
+                assertTrue(new org.apache.pdfbox.text.PDFTextStripper().getText(doc).contains("caption"),
+                        "the caption must be pulled back onto the page, not lost");
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
     void aFieldWithNoLabelDrawsNothingExtra() throws Exception {
         // The common case: the document already prints its own labels, so the tool must not
         // stamp anything onto it.
