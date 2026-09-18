@@ -288,6 +288,28 @@ class PdfInspectorTest {
     }
 
     @Test
+    void theOptionsPartDeserializesFromExactlyWhatTheAppSends() throws Exception {
+        // The app builds this JSON by hand. Jackson's snake-case strategy turns
+        // removeJavaScript into remove_java_script (not remove_javascript), and a mismatch would
+        // silently fall back to the default — the flag the user turned off would still apply.
+        String sent = """
+                {"remove_java_script":false,"remove_embedded_files":false,"remove_actions":false,
+                 "remove_metadata":false,"remove_annotations":true,"remove_external_links":true,
+                 "remove_forms":true}""";
+
+        SanitizePdfRequest req = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readValue(sent, SanitizePdfRequest.class);
+
+        assertFalse(req.isRemoveJavaScript());
+        assertFalse(req.isRemoveEmbeddedFiles());
+        assertFalse(req.isRemoveActions());
+        assertFalse(req.isRemoveMetadata());
+        assertTrue(req.isRemoveAnnotations());
+        assertTrue(req.isRemoveExternalLinks());
+        assertTrue(req.isRemoveForms());
+    }
+
+    @Test
     void theNamesTreeSurvivesWhenOnlyOneOfItsTwoBranchesIsBeingRemoved() throws Exception {
         // /Names carries both JavaScript and EmbeddedFiles. The original code dropped the whole
         // tree, which is only correct when both are going.
