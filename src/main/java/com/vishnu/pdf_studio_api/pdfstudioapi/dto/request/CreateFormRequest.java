@@ -59,6 +59,19 @@ public class CreateFormRequest {
         private Boolean multiSelect;     // list box accepting more than one choice
         private String format;           // number | email | phone | date — drives format actions
         private String validationPattern; // regex the value must match
+
+        // Numeric bounds, enforced as a validate action. These were editor-only until now: set
+        // in the inspector, stored in the draft, enforced by the in-app runtime and invisible to
+        // every other PDF reader.
+        private Double min;
+        private Double max;
+
+        // Number presentation. Previously hardcoded to two decimals with a separator, which
+        // turned a PIN or an account number into "123,456.00" with no way for the author to
+        // stop it. Null means the default below (no decimals, no separator), which mangles
+        // nothing; an amount field opts in to 2.
+        private Integer decimalPlaces;   // 0-4
+        private Boolean groupDigits;     // thousands separator
         private String dateFormat;        // dd/mm/yyyy | mm/dd/yyyy | yyyy-mm-dd
         private Condition condition;      // show only when another field matches
         private CalculationSpec calculation; // value derived from other fields

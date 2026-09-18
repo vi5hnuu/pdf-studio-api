@@ -49,6 +49,76 @@ class CreateFormTest {
     }
 
     @Test
+    void flatteningDoesNotStampTheFillTimeGreyBoxIntoThePage() throws Exception {
+        // Data-entry widgets get a light grey background and outline so an empty field is
+        // visible to whoever is filling the form. flatten() bakes each widget's appearance into
+        // the page, so without stripping that first a finished document came out covered in
+        // grey boxes.
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec text = spec("text", "full_name", 200);
+            byte[] form = PdfTools.createForm(pdf, List.of(text));
+
+            Path withForm = Files.createTempFile("flatten-test-", ".pdf");
+            Files.write(withForm, form);
+            try (PDDocument doc = Loader.loadPDF(withForm.toFile())) {
+                // Sanity: the styling really is there before flattening.
+                assertNotNull(doc.getDocumentCatalog().getAcroForm().getField("full_name"));
+
+                byte[] flat = PdfTools.flattenPdf(doc);
+                try (PDDocument out = Loader.loadPDF(flat)) {
+                    String content = pageContent(out);
+                    // `sc` / `SC`, not `rg` / `RG`: PDFBox's appearance generator sets the
+                    // colour space with `/DeviceRGB cs` and then uses the generic operators.
+                    // A first version of this test looked for `rg` and therefore passed with
+                    // the fix removed — worth stating, because the wrong operator makes this
+                    // assertion silently meaningless rather than failing.
+                    assertFalse(content.contains("0.96 0.96 0.96 sc"),
+                            "the fill-time background must not survive flattening:\n" + content);
+                    assertFalse(content.contains("0.45 0.45 0.45 SC"),
+                            "the fill-time border must not survive flattening:\n" + content);
+                }
+            } finally {
+                Files.deleteIfExists(withForm);
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    /**
+     * First page's drawing operators — its own content streams *and* the Form XObjects they
+     * invoke.
+     *
+     * <p>The XObjects are the point. PDFBox's {@code flatten()} does not inline a widget's
+     * appearance into the page stream; it imports it as a Form XObject and emits a {@code /Do}.
+     * A first version of this helper read only the page's own streams, so it found nothing and
+     * the test passed just as happily with the fix removed — which is how it was caught.
+     */
+    private static String pageContent(PDDocument doc) throws IOException {
+        PDPage page = doc.getPage(0);
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Iterator<org.apache.pdfbox.pdmodel.common.PDStream> it =
+                     page.getContentStreams(); it.hasNext(); ) {
+            sb.append(new String(it.next().toByteArray(), java.nio.charset.StandardCharsets.ISO_8859_1));
+        }
+        org.apache.pdfbox.pdmodel.PDResources res = page.getResources();
+        if (res != null) {
+            for (COSName name : res.getXObjectNames()) {
+                org.apache.pdfbox.pdmodel.graphics.PDXObject xo = res.getXObject(name);
+                if (xo instanceof org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject form) {
+                    sb.append(new String(form.getCOSObject().toTextString()
+                            .getBytes(java.nio.charset.StandardCharsets.ISO_8859_1),
+                            java.nio.charset.StandardCharsets.ISO_8859_1));
+                    sb.append(new String(form.getContentStream().toByteArray(),
+                            java.nio.charset.StandardCharsets.ISO_8859_1));
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    @Test
     void drawsEachRadioOptionsLabelOntoThePage() throws Exception {
         // Before this, a radio group in the output was three identical circles with nothing to
         // say which was "Savings" and which was "Current": the spec had no label at all, and

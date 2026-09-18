@@ -927,6 +927,7 @@ public class PdfTools {
     public static byte[] flattenPdf(PDDocument document) throws IOException {
         PDAcroForm acroForm = document.getDocumentCatalog().getAcroForm();
         if (acroForm != null) {
+            stripDataEntryStyling(acroForm);
             acroForm.flatten();
         }
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -1791,12 +1792,17 @@ public class PdfTools {
                         cb.setPartialName(name);
                         acro.getFields().add(cb);
                         placeWidget(cb, page, rect);
-                        if (Boolean.TRUE.equals(f.getRequired())) cb.setRequired(true);
+                        applyCommonTraits(cb, f);
                         boolean on = Boolean.TRUE.equals(f.getChecked()) || isTruthy(f.getValue());
+                        // The on-state was hardcoded "Yes", so a checkbox could never export
+                        // "Y", "1" or "Male" however the author named it. COSName-safe, like the
+                        // radio on-states.
+                        String onState = safeName(f.getExportValue(), "Yes")
+                                .replaceAll("[^A-Za-z0-9_]", "_");
                         // Build real On/Off appearance streams so the box renders and toggles.
-                        buildToggleAppearance(doc, cb.getWidgets().get(0), "Yes", false, on);
-                        cb.getCOSObject().setName(COSName.V, on ? "Yes" : "Off");
-                        cb.getCOSObject().setName(COSName.getPDFName("DV"), on ? "Yes" : "Off");
+                        buildToggleAppearance(doc, cb.getWidgets().get(0), onState, false, on);
+                        cb.getCOSObject().setName(COSName.V, on ? onState : "Off");
+                        cb.getCOSObject().setName(COSName.getPDFName("DV"), on ? onState : "Off");
                         break;
                     }
                     case "dropdown": {
@@ -1805,6 +1811,7 @@ public class PdfTools {
                         acro.getFields().add(combo);
                         if (f.getOptions() != null && !f.getOptions().isEmpty()) combo.setOptions(f.getOptions());
                         placeWidget(combo, page, rect);
+                        applyCommonTraits(combo, f);
                         if (f.getValue() != null && !f.getValue().isBlank()) {
                             try { combo.setValue(f.getValue()); } catch (Exception ignore) {}
                         }
@@ -1815,6 +1822,7 @@ public class PdfTools {
                         sig.setPartialName(name);
                         acro.getFields().add(sig);
                         placeWidget(sig, page, rect);
+                        applyCommonTraits(sig, f);
                         break;
                     }
                     case "listbox": {
@@ -1824,7 +1832,7 @@ public class PdfTools {
                         if (f.getOptions() != null && !f.getOptions().isEmpty()) list.setOptions(f.getOptions());
                         list.setMultiSelect(Boolean.TRUE.equals(f.getMultiSelect()));
                         placeWidget(list, page, rect);
-                        if (Boolean.TRUE.equals(f.getRequired())) list.setRequired(true);
+                        applyCommonTraits(list, f);
                         if (f.getValue() != null && !f.getValue().isBlank()) {
                             try { list.setValue(f.getValue()); } catch (Exception ignore) {}
                         }
@@ -1879,6 +1887,9 @@ public class PdfTools {
                     exports.add(onState);
                     idx++;
                 }
+                // Traits come from the first option — they describe the question, not the
+                // individual circle, and were never applied to a radio group at all.
+                applyCommonTraits(radio, e.getValue().get(0));
                 radio.setWidgets(widgets);
                 try { radio.setExportValues(exports); } catch (Exception ignore) {}
                 radio.getCOSObject().setName(COSName.V, selected);
@@ -1890,6 +1901,22 @@ public class PdfTools {
             doc.save(baos, CompressParameters.NO_COMPRESSION);
             return baos.toByteArray();
         }
+    }
+
+    /**
+     * Traits any field can carry, whatever its type.
+     *
+     * <p>These were applied only inside the text-field branch, so a tooltip or a read-only flag
+     * set on a checkbox, radio, dropdown, listbox or signature was accepted by the API, shown in
+     * the editor as though it had taken effect, and then silently dropped. Required was the same
+     * for radio and dropdown.
+     */
+    private static void applyCommonTraits(PDField field, FormFieldSpec f) {
+        if (f.getTooltip() != null && !f.getTooltip().isBlank()) {
+            field.getCOSObject().setString(COSName.TU, f.getTooltip());
+        }
+        if (Boolean.TRUE.equals(f.getReadOnly())) field.setReadOnly(true);
+        if (Boolean.TRUE.equals(f.getRequired())) field.setRequired(true);
     }
 
     /**
@@ -1933,17 +1960,43 @@ public class PdfTools {
             keystroke = "AFDate_KeystrokeEx(\"" + mask + "\");";
             formatScript = "AFDate_FormatEx(\"" + mask + "\");";
         } else if ("number".equals(format)) {
-            // nDec, sepStyle, negStyle, currStyle, strCurrency, bCurrencyPrepend
-            keystroke = "AFNumber_Keystroke(2,0,0,0,\"\",true);";
-            formatScript = "AFNumber_Format(2,0,0,0,\"\",true);";
+            // nDec, sepStyle, negStyle, currStyle, strCurrency, bCurrencyPrepend.
+            //
+            // Defaults are 0 decimals and no separator. This used to be hardcoded to
+            // AFNumber_Keystroke(2,0,...), so *every* number field rendered "123,456.00" —
+            // correct for an amount and wrong for a PIN, a quantity or an account number, with
+            // no control anywhere to change it. sepStyle 0 groups digits, 1 does not.
+            int decimals = f.getDecimalPlaces() == null ? 0 : Math.max(0, Math.min(4, f.getDecimalPlaces()));
+            int sepStyle = Boolean.TRUE.equals(f.getGroupDigits()) ? 0 : 1;
+            keystroke = "AFNumber_Keystroke(" + decimals + "," + sepStyle + ",0,0,\"\",true);";
+            formatScript = "AFNumber_Format(" + decimals + "," + sepStyle + ",0,0,\"\",true);";
         }
 
-        String validate = null;
+        // Validation: pattern and numeric range. The range half is new — `min`/`max` were
+        // offered in the editor, stored in the draft and enforced by the in-app runtime, but
+        // never reached the PDF, so a form filled in any other reader ignored them entirely.
+        StringBuilder validateBuilder = new StringBuilder();
         if (f.getValidationPattern() != null && !f.getValidationPattern().isBlank()) {
             String pattern = f.getValidationPattern().replace("\\", "\\\\").replace("\"", "\\\"");
-            validate = "if (event.value && !(new RegExp(\"" + pattern + "\").test(event.value))) {"
-                    + " app.alert(\"That value is not in the expected format.\"); event.rc = false; }";
+            validateBuilder.append("if (event.value && !(new RegExp(\"").append(pattern)
+                    .append("\").test(event.value))) {")
+                    .append(" app.alert(\"That value is not in the expected format.\"); event.rc = false; }");
         }
+        if (f.getMin() != null || f.getMax() != null) {
+            validateBuilder.append("if (event.value !== \"\") { var v = parseFloat(event.value);");
+            if (f.getMin() != null) {
+                validateBuilder.append(" if (v < ").append(f.getMin())
+                        .append(") { app.alert(\"Minimum is ").append(f.getMin())
+                        .append(".\"); event.rc = false; }");
+            }
+            if (f.getMax() != null) {
+                validateBuilder.append(" if (v > ").append(f.getMax())
+                        .append(") { app.alert(\"Maximum is ").append(f.getMax())
+                        .append(".\"); event.rc = false; }");
+            }
+            validateBuilder.append(" }");
+        }
+        String validate = validateBuilder.length() == 0 ? null : validateBuilder.toString();
 
         String calculate = null;
         FormFieldSpec.CalculationSpec calc = f.getCalculation();
@@ -2101,6 +2154,7 @@ public class PdfTools {
                     }
                 }
                 try { form.refreshAppearances(); } catch (Exception ignore) {}
+                stripDataEntryStyling(form);
                 form.flatten();
             }
             doc.save(baos, CompressParameters.NO_COMPRESSION);
@@ -2225,6 +2279,44 @@ public class PdfTools {
             styleDataEntryWidget(w);
         }
         page.getAnnotations().add(w);
+    }
+
+    /**
+     * Removes the fill-time styling from every data-entry widget, so flattening does not stamp
+     * it into the page.
+     *
+     * <p>{@link #styleDataEntryWidget} gives text and choice fields a light grey background and
+     * a grey outline, because an empty field with neither is invisible in readers that do not
+     * synthesise one — the person filling the form cannot see where to type. That is right while
+     * the form is fillable and wrong the moment it is flattened: {@code flatten()} bakes each
+     * widget's appearance stream into the page, leaving grey boxes across a finished document.
+     *
+     * <p>Clearing {@code /MK} alone is not enough, because the grey is already inside the
+     * generated appearance stream. The appearance has to be dropped and rebuilt as well.
+     *
+     * <p>Toggles are deliberately left alone: their appearance streams are hand-built vector
+     * paths (see {@link #buildToggleStream}), regenerating them has broken before, and a ticked
+     * or unticked box is meaningful content in a flattened form rather than fill-time decoration.
+     */
+    private static void stripDataEntryStyling(PDAcroForm acroForm) {
+        try {
+            for (PDField field : acroForm.getFieldTree()) {
+                if (field instanceof PDCheckBox || field instanceof PDRadioButton) continue;
+                for (PDAnnotationWidget w : field.getWidgets()) {
+                    w.getCOSObject().removeItem(COSName.MK);
+                    PDBorderStyleDictionary none = new PDBorderStyleDictionary();
+                    none.setWidth(0);
+                    w.setBorderStyle(none);
+                    // Force regeneration from the (now unstyled) characteristics.
+                    w.getCOSObject().removeItem(COSName.AP);
+                }
+            }
+            acroForm.refreshAppearances();
+        } catch (Exception e) {
+            // Never fail a flatten over cosmetics — a flattened form with grey boxes still beats
+            // no flattened form.
+            log.warn("Could not strip data-entry styling before flatten: {}", e.getMessage());
+        }
     }
 
     /** Gives a data-entry widget a visible outline and a faint fill. */
