@@ -37,6 +37,11 @@ import org.apache.pdfbox.pdmodel.interactive.form.PDListBox;
 import org.apache.pdfbox.pdmodel.interactive.form.PDRadioButton;
 import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotation;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink;
+import org.apache.pdfbox.pdmodel.interactive.action.PDActionURI;
+import org.apache.pdfbox.cos.COSBase;
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.SanitizePdfRequest;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceCharacteristicsDictionary;
@@ -1345,18 +1350,70 @@ public class PdfTools {
      * visible page content intact.
      */
     public static byte[] sanitizePdf(Path pdfPath) throws IOException {
+        return sanitizePdf(pdfPath, new SanitizePdfRequest());
+    }
+
+    /**
+     * Sanitizes selectively.
+     *
+     * <p>The one-argument form is all-or-nothing, which meant someone who wanted the author's name
+     * off a document also lost the form they had filled in. The defaults on
+     * {@link SanitizePdfRequest} reproduce the old behaviour exactly, so this is a widening, not a
+     * change.
+     *
+     * <p>The /Names tree carries both JavaScript and EmbeddedFiles, so it can only be dropped
+     * wholesale when both are being removed; otherwise the individual sub-entries go.
+     */
+    public static byte[] sanitizePdf(Path pdfPath, SanitizePdfRequest opts) throws IOException {
         try (PDDocument doc = PdfDocuments.load(pdfPath);
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             PDDocumentCatalog cat = doc.getDocumentCatalog();
-            cat.setOpenAction(null);
             COSDictionary catDict = cat.getCOSObject();
-            // The /Names tree holds JavaScript and EmbeddedFiles; /AA holds
-            // additional (event) actions. Dropping them removes active content.
-            catDict.removeItem(COSName.getPDFName("Names"));
-            catDict.removeItem(COSName.getPDFName("AA"));
-            catDict.removeItem(COSName.getPDFName("OpenAction"));
-            cat.setMetadata(null);
-            doc.setDocumentInformation(new PDDocumentInformation());
+
+            if (opts.isRemoveActions()) {
+                cat.setOpenAction(null);
+                catDict.removeItem(COSName.getPDFName("AA"));
+                catDict.removeItem(COSName.getPDFName("OpenAction"));
+            }
+
+            if (opts.isRemoveJavaScript() && opts.isRemoveEmbeddedFiles()) {
+                catDict.removeItem(COSName.getPDFName("Names"));
+            } else {
+                COSBase namesBase = catDict.getDictionaryObject(COSName.getPDFName("Names"));
+                if (namesBase instanceof COSDictionary names) {
+                    if (opts.isRemoveJavaScript()) names.removeItem(COSName.getPDFName("JavaScript"));
+                    if (opts.isRemoveEmbeddedFiles()) names.removeItem(COSName.getPDFName("EmbeddedFiles"));
+                }
+            }
+
+            if (opts.isRemoveMetadata()) {
+                cat.setMetadata(null);
+                doc.setDocumentInformation(new PDDocumentInformation());
+            }
+
+            if (opts.isRemoveForms()) {
+                cat.setAcroForm(null);
+            }
+
+            if (opts.isRemoveAnnotations() || opts.isRemoveExternalLinks() || opts.isRemoveForms()) {
+                for (PDPage page : doc.getPages()) {
+                    List<PDAnnotation> keep = new ArrayList<>();
+                    for (PDAnnotation a : page.getAnnotations()) {
+                        if (opts.isRemoveAnnotations()) continue;
+                        // A widget annotation is the on-page half of a form field; leaving it
+                        // behind after dropping the AcroForm produces a field that is drawn but
+                        // belongs to nothing.
+                        if (opts.isRemoveForms() && a instanceof PDAnnotationWidget) continue;
+                        if (opts.isRemoveExternalLinks() && a instanceof PDAnnotationLink link
+                                && link.getAction() instanceof PDActionURI) {
+                            continue;
+                        }
+                        keep.add(a);
+                    }
+                    page.setAnnotations(keep);
+                }
+            }
+
             doc.save(baos, CompressParameters.NO_COMPRESSION);
             return baos.toByteArray();
         }

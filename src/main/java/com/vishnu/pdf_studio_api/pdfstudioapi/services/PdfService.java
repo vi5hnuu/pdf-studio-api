@@ -13,6 +13,8 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.util.OpenPdf;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfDocuments;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.TempFiles;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
+import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfInspector;
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.SanitizePdfRequest;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.OfficeConvertTools;
 import com.vishnu.pdf_studio_api.pdfstudioapi.validation.UploadValidator;
 import lombok.RequiredArgsConstructor;
@@ -580,8 +582,13 @@ public class PdfService {
 
     /** Removes JavaScript, embedded files, actions and metadata from a PDF. */
     public ResponseEntity<Resource> sanitizePdf(MultipartFile file) {
+        return sanitizePdf(file, new SanitizePdfRequest());
+    }
+
+    /** Removes only what [opts] asks for. The defaults match the all-or-nothing behaviour. */
+    public ResponseEntity<Resource> sanitizePdf(MultipartFile file, SanitizePdfRequest opts) {
         try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
-            byte[] doc = PdfTools.sanitizePdf(upload.path());
+            byte[] doc = PdfTools.sanitizePdf(upload.path(), opts);
             ByteArrayResource baR = new ByteArrayResource(doc);
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, DownloadResponse.header(null, "sanitized", "pdf"));
@@ -612,6 +619,63 @@ public class PdfService {
         headers.setContentLength(zip.length);
         headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
         return ResponseEntity.ok().headers(headers).body(baR);
+    }
+
+    // ── Inspectors ───────────────────────────────────────────────────────────────
+    // All read-only. They share the openPdf/OpenPdf handle so an encrypted upload is opened with
+    // the caller's password the same way every other tool does.
+
+    /** What the document's security handler allows. */
+    public ResponseEntity<?> inspectPermissions(MultipartFile file) {
+        try (OpenPdf opened = openPdf(file)) {
+            return ResponseEntity.ok(PdfInspector.permissions(opened.document()));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Active and privacy-relevant content: JavaScript, actions, attachments, links, signatures. */
+    public ResponseEntity<?> scanSecurity(MultipartFile file) {
+        try (OpenPdf opened = openPdf(file)) {
+            return ResponseEntity.ok(PdfInspector.securityScan(opened.document()));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Catalog flags plus per-page size, rotation, fonts and resource counts. */
+    public ResponseEntity<?> inspectStructure(MultipartFile file) {
+        try (OpenPdf opened = openPdf(file)) {
+            return ResponseEntity.ok(PdfInspector.structure(opened.document()));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * A page of the file's indirect objects.
+     *
+     * <p>Paged rather than complete: a real document has thousands of objects, and sending them
+     * all would be a multi-megabyte JSON body for a phone to parse.
+     */
+    public ResponseEntity<?> exploreObjects(MultipartFile file, Integer offset, Integer limit) {
+        try (OpenPdf opened = openPdf(file)) {
+            int off = offset == null ? 0 : offset;
+            int lim = limit == null ? 100 : Math.min(limit, 500);
+            return ResponseEntity.ok(PdfInspector.objects(opened.document(), off, lim));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** The whole document as structured JSON. */
+    public ResponseEntity<?> pdfToJson(MultipartFile file, Boolean includeText) {
+        try (OpenPdf opened = openPdf(file)) {
+            return ResponseEntity.ok(
+                    PdfInspector.toJson(opened.document(), includeText == null || includeText));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /** Lists a PDF's existing AcroForm fields as JSON. */

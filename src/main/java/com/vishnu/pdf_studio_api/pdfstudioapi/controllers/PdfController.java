@@ -355,11 +355,64 @@ public class PdfController {
         return pdfService.extractEmbeddedFiles(file);
     }
 
-    /** Removes JavaScript, embedded files, actions and metadata from a PDF. */
+    /**
+     * Removes active and identifying content from a PDF.
+     *
+     * <p>The options part is optional and every flag defaults to what sanitize always did, so
+     * existing callers that send only the file are unaffected.
+     */
     @ValidateUpload
     @PostMapping(value = "/sanitize-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Resource> sanitizePdf(@RequestPart("file") MultipartFile file) {
-        return pdfService.sanitizePdf(file);
+    public ResponseEntity<Resource> sanitizePdf(
+            @RequestPart(value = "sanitize-pdf-info", required = false) SanitizePdfRequest req,
+            @RequestPart("file") MultipartFile file) {
+        if (req == null) req = new SanitizePdfRequest();
+        return pdfService.sanitizePdf(file, req);
+    }
+
+    // ── Inspectors ───────────────────────────────────────────────────────────────
+    // Read-only reports. None of them charge credits: they produce no document, and a user
+    // checking whether a file is safe to open should not have to pay to find out.
+
+    /** Reports what the document's security handler allows. */
+    @ValidateUpload
+    @PostMapping(value = "/inspect-permissions", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> inspectPermissions(@RequestPart("file") MultipartFile file) {
+        return pdfService.inspectPermissions(file);
+    }
+
+    /** Reports active content: JavaScript, actions, attachments, outbound links, signatures. */
+    @ValidateUpload
+    @PostMapping(value = "/scan-security", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> scanSecurity(@RequestPart("file") MultipartFile file) {
+        return pdfService.scanSecurity(file);
+    }
+
+    /** Reports the document skeleton: catalog flags and per-page size, fonts and resources. */
+    @ValidateUpload
+    @PostMapping(value = "/inspect-structure", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> inspectStructure(@RequestPart("file") MultipartFile file) {
+        return pdfService.inspectStructure(file);
+    }
+
+    /** Lists a page of the file's indirect (COS) objects. */
+    @ValidateUpload
+    @PostMapping(value = "/explore-objects", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> exploreObjects(
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(value = "offset", required = false) Integer offset,
+            @RequestParam(value = "limit", required = false) Integer limit) {
+        return pdfService.exploreObjects(file, offset, limit);
+    }
+
+    /** Returns the whole document as structured JSON. */
+    @HeavyTool
+    @ValidateUpload
+    @PostMapping(value = "/pdf-to-json", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> pdfToJson(
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(value = "include-text", required = false) Boolean includeText) {
+        return pdfService.pdfToJson(file, includeText);
     }
 
     /** Splits a PDF into parts no larger than the requested size, returned as a ZIP. */

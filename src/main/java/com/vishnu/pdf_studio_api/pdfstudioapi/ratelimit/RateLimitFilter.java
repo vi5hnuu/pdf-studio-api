@@ -68,7 +68,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
             "pdf-to-jpg", "pdf-to-word", "pdf-to-excel", "pdf-to-pptx",
             "compress-pdf", "grayscale-pdf", "remove-blank-pages", "analyze-pdf",
             "optimize-pdf", "repair-pdf", "extract-images", "n-up", "redact-pdf",
-            "split-by-size", "image-to-pdf",
+            "split-by-size", "image-to-pdf", "pdf-to-json",
             "purchase", "rewarded", "daily"
     );
 
