@@ -370,6 +370,16 @@ public class PdfController {
         return pdfService.sanitizePdf(file, req);
     }
 
+    /** Adds marks to a PDF as real annotation objects (/Ink, /Highlight, /Square, /FreeText…). */
+    @ChargeCredits(tool = "annotate-pdf")
+    @ValidateUpload
+    @PostMapping(value = "/annotate-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Resource> annotatePdf(
+            @RequestPart("annotate-pdf-info") AnnotatePdfRequest req,
+            @RequestPart("file") MultipartFile file) {
+        return pdfService.annotatePdf(req.getOutFileName(), req.getAnnotations(), file);
+    }
+
     // ── Inspectors ───────────────────────────────────────────────────────────────
     // Read-only reports. None of them charge credits: they produce no document, and a user
     // checking whether a file is safe to open should not have to pay to find out.

@@ -14,6 +14,8 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfDocuments;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.TempFiles;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfInspector;
+import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfAnnotator;
+import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.AnnotatePdfRequest;
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.SanitizePdfRequest;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.OfficeConvertTools;
 import com.vishnu.pdf_studio_api.pdfstudioapi.validation.UploadValidator;
@@ -619,6 +621,22 @@ public class PdfService {
         headers.setContentLength(zip.length);
         headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
         return ResponseEntity.ok().headers(headers).body(baR);
+    }
+
+    /**
+     * Adds marks to a PDF as real annotation objects.
+     *
+     * <p>One call for the whole document. The annotate tool used to stamp one rasterised image per
+     * annotated page, re-uploading the growing PDF each time — ten annotated pages meant ten round
+     * trips over an ever-larger file.
+     */
+    public ResponseEntity<Resource> annotatePdf(String outFileName, java.util.List<AnnotatePdfRequest.AnnotationSpec> annotations, MultipartFile file) {
+        if (outFileName == null || outFileName.isBlank()) outFileName = "annotated";
+        try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
+            return pdfResponse(PdfAnnotator.annotate(upload.path(), annotations), outFileName);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     // ── Inspectors ───────────────────────────────────────────────────────────────

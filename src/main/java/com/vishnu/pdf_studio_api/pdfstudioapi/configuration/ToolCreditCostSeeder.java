@@ -72,6 +72,9 @@ public class ToolCreditCostSeeder implements ApplicationRunner {
         list.add(flat("redact-pdf", 2));
         list.add(flat("watermark-pdf", 1));
         list.add(flat("stamp-pdf", 1));
+        // Annotate used to run through stamp-pdf, so it keeps that price: giving it its own
+        // endpoint should not quietly change what a user pays for the same action.
+        list.add(flat("annotate-pdf", 1));
         list.add(flat("grayscale-pdf", 1));
         list.add(flat("crop-pdf", 1));
         list.add(flat("flatten-pdf", 1));
