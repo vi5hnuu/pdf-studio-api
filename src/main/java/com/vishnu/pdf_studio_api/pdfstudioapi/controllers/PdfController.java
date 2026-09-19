@@ -377,7 +377,7 @@ public class PdfController {
     public ResponseEntity<Resource> annotatePdf(
             @RequestPart("annotate-pdf-info") AnnotatePdfRequest req,
             @RequestPart("file") MultipartFile file) {
-        return pdfService.annotatePdf(req.getOutFileName(), req.getAnnotations(), file);
+        return pdfService.annotatePdf(req.getOutFileName(), req.getAnnotations(), req.isFlatten(), file);
     }
 
     // ── Inspectors ───────────────────────────────────────────────────────────────

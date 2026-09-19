@@ -630,10 +630,10 @@ public class PdfService {
      * annotated page, re-uploading the growing PDF each time — ten annotated pages meant ten round
      * trips over an ever-larger file.
      */
-    public ResponseEntity<Resource> annotatePdf(String outFileName, java.util.List<AnnotatePdfRequest.AnnotationSpec> annotations, MultipartFile file) {
+    public ResponseEntity<Resource> annotatePdf(String outFileName, java.util.List<AnnotatePdfRequest.AnnotationSpec> annotations, boolean flatten, MultipartFile file) {
         if (outFileName == null || outFileName.isBlank()) outFileName = "annotated";
         try (TempFiles.Handle upload = TempFiles.of(file, ".pdf")) {
-            return pdfResponse(PdfAnnotator.annotate(upload.path(), annotations), outFileName);
+            return pdfResponse(PdfAnnotator.annotate(upload.path(), annotations, flatten), outFileName);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

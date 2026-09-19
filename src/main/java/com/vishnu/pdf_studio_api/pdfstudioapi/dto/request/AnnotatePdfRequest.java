@@ -29,6 +29,17 @@ public class AnnotatePdfRequest {
     private List<AnnotationSpec> annotations;
 
     /**
+     * Bakes the marks into the page content and removes the annotation objects.
+     *
+     * <p>Off by default, because a real annotation is the better artefact: vector, listed as a
+     * comment, and removable. But not every renderer draws annotations — Pdfium, which the app's
+     * own preview uses, ignores them entirely — so a user who wants the marks to show up
+     * <em>everywhere</em>, or to be permanent, needs this. Done in the same request so it costs
+     * neither an extra round trip nor an extra charge.
+     */
+    private boolean flatten = false;
+
+    /**
      * One mark.
      *
      * <p>Deliberately one flat shape rather than a polymorphic hierarchy: the fields that apply

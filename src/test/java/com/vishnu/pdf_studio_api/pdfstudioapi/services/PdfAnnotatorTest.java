@@ -220,6 +220,43 @@ class PdfAnnotatorTest {
     }
 
     @Test
+    void flatteningBakesTheMarksIntoThePageAndLeavesNoAnnotationsBehind() throws Exception {
+        // Real annotations are the better artefact, but not every renderer draws them — Pdfium,
+        // which the app's own preview uses, ignores them completely, so a user who flattens
+        // expects marks that show up everywhere. Both halves matter: the content has to gain the
+        // mark *and* the annotation object has to go, or it is drawn twice in viewers that do
+        // render annotations.
+        AnnotationSpec ink = spec("ink");
+        ink.setPoints(List.of(List.of(0.1f, 0.1f), List.of(0.5f, 0.5f)));
+        AnnotationSpec square = spec("square");
+        square.setRect(rect(0.2f, 0.6f, 0.4f, 0.1f));
+
+        Path pdf = onePagePdf();
+        try {
+            long plainLength;
+            try (PDDocument doc = Loader.loadPDF(PdfAnnotator.annotate(pdf, List.of()))) {
+                plainLength = doc.getPage(0).getContents().readAllBytes().length;
+            }
+
+            byte[] flat = PdfAnnotator.annotate(pdf, List.of(ink, square), true);
+            try (PDDocument doc = Loader.loadPDF(flat)) {
+                assertEquals(0, doc.getPage(0).getAnnotations().size(),
+                        "a flattened mark left its annotation behind, so viewers that draw "
+                                + "annotations would render it twice");
+                assertTrue(doc.getPage(0).getContents().readAllBytes().length > plainLength,
+                        "nothing was added to the page content, so the mark was simply lost");
+            }
+
+            // …and the default still produces annotations rather than baking them in.
+            try (PDDocument doc = Loader.loadPDF(PdfAnnotator.annotate(pdf, List.of(ink, square)))) {
+                assertEquals(2, doc.getPage(0).getAnnotations().size());
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
     void theRequestDeserializesFromExactlyWhatTheAppSends() throws Exception {
         // The app builds this JSON by hand. A snake_case mismatch does not fail — it silently
         // leaves the field null, so a stroke width or a colour would quietly become the default.

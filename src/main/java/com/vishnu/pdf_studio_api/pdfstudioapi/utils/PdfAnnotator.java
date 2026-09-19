@@ -5,6 +5,9 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.util.PdfDocuments;
 import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
+import org.apache.pdfbox.util.Matrix;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.graphics.color.PDColor;
 import org.apache.pdfbox.pdmodel.graphics.color.PDDeviceRGB;
@@ -51,6 +54,12 @@ public final class PdfAnnotator {
     private static final String AUTHOR = "PDF Craft";
 
     public static byte[] annotate(Path pdfPath, List<AnnotationSpec> specs) throws IOException {
+        return annotate(pdfPath, specs, false);
+    }
+
+    /** As {@link #annotate(Path, List)}, optionally baking the marks into the page content. */
+    public static byte[] annotate(Path pdfPath, List<AnnotationSpec> specs, boolean flatten)
+            throws IOException {
         try (PDDocument doc = PdfDocuments.load(pdfPath);
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
@@ -77,8 +86,58 @@ public final class PdfAnnotator {
                 }
             }
 
+            if (flatten) flattenAnnotations(doc);
+
             doc.save(out, CompressParameters.NO_COMPRESSION);
             return out.toByteArray();
+        }
+    }
+
+    /**
+     * Draws every annotation's appearance into the page content and removes the annotation.
+     *
+     * <p>PDFBox's {@code PDAcroForm.flatten()} only handles form fields, so markup annotations
+     * need doing by hand. Each appearance stream is a form XObject with its own bounding box and
+     * matrix; the transform below maps that box onto the annotation's rectangle, which is what the
+     * PDF specification says a viewer does when it draws the annotation. Getting that mapping
+     * wrong is the classic failure — the mark lands in the corner of the page at the wrong size.
+     */
+    private static void flattenAnnotations(PDDocument doc) throws IOException {
+        for (PDPage page : doc.getPages()) {
+            List<PDAnnotation> annotations = page.getAnnotations();
+            if (annotations.isEmpty()) continue;
+
+            try (PDPageContentStream cs = new PDPageContentStream(
+                    doc, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                for (PDAnnotation annotation : annotations) {
+                    PDAppearanceStream appearance = annotation.getNormalAppearanceStream();
+                    if (appearance == null) continue;
+
+                    PDRectangle rect = annotation.getRectangle();
+                    PDRectangle bbox = appearance.getBBox();
+                    if (rect == null || bbox == null || bbox.getWidth() == 0 || bbox.getHeight() == 0) {
+                        continue;
+                    }
+
+                    // The appearance's own matrix first, then fit the transformed box into /Rect.
+                    Matrix matrix = appearance.getMatrix();
+                    java.awt.geom.Rectangle2D transformed = bbox.transform(matrix).getBounds2D();
+                    if (transformed.getWidth() == 0 || transformed.getHeight() == 0) continue;
+
+                    float sx = (float) (rect.getWidth() / transformed.getWidth());
+                    float sy = (float) (rect.getHeight() / transformed.getHeight());
+
+                    cs.saveGraphicsState();
+                    cs.transform(Matrix.getTranslateInstance(rect.getLowerLeftX(), rect.getLowerLeftY()));
+                    cs.transform(Matrix.getScaleInstance(sx, sy));
+                    cs.transform(Matrix.getTranslateInstance((float) -transformed.getX(),
+                            (float) -transformed.getY()));
+                    cs.drawForm(appearance);
+                    cs.restoreGraphicsState();
+                }
+            }
+            // The marks are part of the page now; leaving the objects behind would draw them twice.
+            page.setAnnotations(new ArrayList<>());
         }
     }
 
