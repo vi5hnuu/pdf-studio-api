@@ -417,26 +417,21 @@ public class PdfTools {
             final PDPageTree pageTree = loadedDoc.getPages();
             final int total = loadedDoc.getNumberOfPages();
 
-            // Validated rather than trusted. The order array came straight from the client with
-            // only @NotEmpty on it, and each failure mode was worse than the last: an index past
-            // the end threw IndexOutOfBoundsException, which the handler does not recognise, so
-            // it surfaced as a 500; a repeated index added the same PDPage object to one page
-            // tree twice; and an omitted index silently *dropped that page* from the output,
-            // returning 200 — on a tool users reasonably treat as lossless.
-            final boolean[] used = new boolean[total];
+            // Range-checked, and deliberately nothing more. `order` is "build a document from
+            // these pages, in this sequence", not "a permutation of every page": delete-pages
+            // sends every index except the ones being removed, extract-pages sends only the
+            // selected ones, and reverse sends them backwards. Requiring a complete permutation
+            // here would reject all three, and rejecting a repeated index would rule out using
+            // the same page twice, which the contract never forbade.
+            //
+            // The one thing genuinely broken was an out-of-range index: the page tree threw
+            // IndexOutOfBoundsException, which GlobalExceptionHandler does not recognise, so it
+            // surfaced as a 500 rather than saying which page did not exist.
             for (final int pageIndex : order) {
                 if (pageIndex < 0 || pageIndex >= total) {
                     throw ApiException.badRequest("Page " + pageIndex
                             + " does not exist; this PDF has " + total + " pages.");
                 }
-                if (used[pageIndex]) {
-                    throw ApiException.badRequest("Page " + pageIndex + " is listed more than once.");
-                }
-                used[pageIndex] = true;
-            }
-            if (order.length != total) {
-                throw ApiException.badRequest("The new order must list all " + total
-                        + " pages; it lists " + order.length + ".");
             }
 
             for (final int pageIndex : order) {

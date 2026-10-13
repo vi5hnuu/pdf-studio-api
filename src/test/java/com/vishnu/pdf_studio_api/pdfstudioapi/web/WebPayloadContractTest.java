@@ -192,6 +192,30 @@ class WebPayloadContractTest {
     }
 
     @Test
+    @DisplayName("reorder-pdf accepts a subset, a reversal and a repeat, and names a bad index")
+    void reorderAcceptsWhatItsCallersSend() throws Exception {
+        // Four screens reach this endpoint and only one of them sends a permutation of every
+        // page: delete-pages sends every index except the removed ones, extract-pages sends only
+        // the selected ones, reverse sends them backwards. A completeness check here rejected
+        // delete and extract outright, which is why this pins the shapes rather than the idea.
+        assertAccepts("reorder-pdf", "reorder-pdf-info", "{\"order\":[0,1,2,3]}");  // organize
+        assertAccepts("reorder-pdf", "reorder-pdf-info", "{\"order\":[0,2]}");      // delete
+        assertAccepts("reorder-pdf", "reorder-pdf-info", "{\"order\":[1]}");        // extract
+        assertAccepts("reorder-pdf", "reorder-pdf-info", "{\"order\":[3,2,1,0]}");  // reverse
+        assertAccepts("reorder-pdf", "reorder-pdf-info", "{\"order\":[0,0,1]}");    // repeat
+
+        var request = multipart("/api/v1/pdf-studio/reorder-pdf")
+                .file(file("file", pdf(4)))
+                .file(part("reorder-pdf-info", "{\"order\":[99]}"));
+        MvcResult result = mockMvc.perform(request.with(user()).with(fromUniqueIp())).andReturn();
+        assertEquals(400, result.getResponse().getStatus());
+        // An out-of-range index used to be a 500, because the page tree's
+        // IndexOutOfBoundsException is not a cause the handler recognises.
+        assertTrue(result.getResponse().getContentAsString().contains("99"),
+                "the 400 should name the page that does not exist");
+    }
+
+    @Test
     @DisplayName("tools that take no options work with only the file part")
     void noOptionTools() throws Exception {
         assertAccepts("sanitize-pdf", null, null);
