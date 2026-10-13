@@ -90,11 +90,20 @@ public final class PdfDocuments {
 
         // Page count is only knowable after parsing, so the cap is applied here — the one point
         // every tool's input passes through.
-        int pages = document.getNumberOfPages();
-        if (pages > maxPages) {
-            document.close();
-            throw ApiException.tooLarge("This PDF has " + pages + " pages; the limit is "
-                    + maxPages + ". Split it first, then try again.");
+        //
+        // Inside its own try: getNumberOfPages() reaches the document catalog, which throws on a
+        // document that parsed but whose catalog is broken. That throw used to escape with the
+        // document — and the RandomAccessReadBufferedFile it had adopted — still open, and since
+        // every upload in the service passes through here it was the leak with the most traffic.
+        try {
+            int pages = document.getNumberOfPages();
+            if (pages > maxPages) {
+                throw ApiException.tooLarge("This PDF has " + pages + " pages; the limit is "
+                        + maxPages + ". Split it first, then try again.");
+            }
+        } catch (RuntimeException e) {
+            document.close(); // closes the adopted source too
+            throw e;
         }
         return document;
     }

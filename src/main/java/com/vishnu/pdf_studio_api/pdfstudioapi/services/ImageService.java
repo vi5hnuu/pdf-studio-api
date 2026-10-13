@@ -356,7 +356,13 @@ public class ImageService {
     }
 
     private BufferedImage readImage(MultipartFile file) throws IOException {
-        BufferedImage img = ImageIO.read(file.getInputStream());
+        // try-with-resources: ImageIO.read closes the ImageInputStream it wraps, never the
+        // InputStream it was given. Every image endpoint goes through here, so this was a file
+        // descriptor leaked per request, released only at GC.
+        BufferedImage img;
+        try (var in = file.getInputStream()) {
+            img = ImageIO.read(in);
+        }
         if (img == null)
             throw new IOException("Unsupported or corrupt image: " + file.getOriginalFilename());
         return img;
