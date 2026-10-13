@@ -2544,15 +2544,23 @@ public class PdfTools {
             if (form != null) {
                 form.setNeedAppearances(false);
                 if (values != null) {
-                    // A field whose value will not set is reported, not skipped. It used to be
-                    // swallowed and then flatten() baked in the *empty* field — so the response
-                    // was a 200 carrying a form with the user's data missing, and nothing in it
-                    // said so. Since flattening is irreversible, a filled form that silently
-                    // lost a field is worse than a request that failed.
+                    // A field whose value will not set is reported, not swallowed. It used to be
+                    // ignored and then flatten() baked in the *empty* field — so the response was
+                    // a 200 carrying a form with the user's data missing, and nothing said so.
+                    // Flattening is irreversible, which makes a silent loss worse than a failure.
+                    //
+                    // Signature fields are the exception, and are skipped rather than reported:
+                    // PDSignatureField.setValue(String) throws unconditionally — a signature is
+                    // not fillable as text by any caller — so there is nothing to lose and
+                    // nothing the client did wrong. Clients do send them: get-form-fields lists
+                    // them, so a form map built from that response includes one. Reporting them
+                    // would have failed every contract and agreement, which is most of what
+                    // anyone fills.
                     List<String> rejected = new ArrayList<>();
                     for (Map.Entry<String, String> e : values.entrySet()) {
                         PDField field = form.getField(e.getKey());
                         if (field == null || e.getValue() == null) continue;
+                        if (field instanceof PDSignatureField) continue;
                         try {
                             field.setValue(e.getValue());
                         } catch (Exception incompatible) {

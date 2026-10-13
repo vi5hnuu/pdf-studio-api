@@ -192,6 +192,21 @@ class WebPayloadContractTest {
     }
 
     @Test
+    @DisplayName("a colour sent by the client still binds, now that ColorModel is immutable")
+    void colorModelStillBinds() throws Exception {
+        // ColorModel has no setters and its fields were made final when BLACK was corrected from
+        // white, so it deserializes only through Jackson's implicit parameter-name creator —
+        // which works because spring-boot-starter-parent compiles with -parameters. Worth pinning:
+        // nothing else would notice it breaking except a document coming out the wrong colour.
+        assertAccepts("page-numbers", "page-numbers-info",
+                "{\"page_no_type\":\"ONLY_X\",\"fill_color\":{\"r\":255,\"g\":0,\"b\":0,\"a\":255}}");
+        assertAccepts("watermark-pdf", "watermark-pdf-info",
+                "{\"text\":\"DRAFT\",\"fill_color\":{\"r\":10,\"g\":20,\"b\":30,\"a\":200}}");
+        // Omitted, so the default applies — which used to be white-on-white.
+        assertAccepts("page-numbers", "page-numbers-info", "{\"page_no_type\":\"ONLY_X\"}");
+    }
+
+    @Test
     @DisplayName("reorder-pdf accepts a subset, a reversal and a repeat, and names a bad index")
     void reorderAcceptsWhatItsCallersSend() throws Exception {
         // Four screens reach this endpoint and only one of them sends a permutation of every
