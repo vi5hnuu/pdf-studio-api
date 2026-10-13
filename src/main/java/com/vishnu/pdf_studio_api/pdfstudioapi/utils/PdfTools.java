@@ -189,14 +189,28 @@ public class PdfTools {
         stripper.setSortByPosition(true);
         if (pages == null || pages.isEmpty()) return stripper.getText(document);
 
-        // Read page by page rather than with a start/end range, so a selection need not be
-        // contiguous — "pages 2, 5 and 9" is as valid a request as "pages 2 to 9".
+        // Grouped into contiguous runs, one getText call each, because
+        // PDFTextStripper.processPages walks the *entire* page tree on every call and skips what
+        // falls outside its range. Calling it once per page therefore cost O(pages squared) node
+        // visits — about four million at the 2000-page cap. A selection still need not be
+        // contiguous: "pages 2, 5 and 9" becomes three calls rather than three hundred.
+        List<Integer> wanted = pages.stream()
+                .filter(index -> index != null && index >= 0 && index < document.getNumberOfPages())
+                .distinct()
+                .sorted()
+                .toList();
+
         StringBuilder text = new StringBuilder();
-        for (int index : pages.stream().distinct().sorted().toList()) {
-            if (index < 0 || index >= document.getNumberOfPages()) continue;
-            stripper.setStartPage(index + 1);
-            stripper.setEndPage(index + 1);
+        int runStart = 0;
+        while (runStart < wanted.size()) {
+            int runEnd = runStart;
+            while (runEnd + 1 < wanted.size() && wanted.get(runEnd + 1) == wanted.get(runEnd) + 1) {
+                runEnd++;
+            }
+            stripper.setStartPage(wanted.get(runStart) + 1);
+            stripper.setEndPage(wanted.get(runEnd) + 1);
             text.append(stripper.getText(document));
+            runStart = runEnd + 1;
         }
         return text.toString();
     }

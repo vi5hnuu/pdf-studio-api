@@ -276,7 +276,15 @@ public class PdfController {
         return pdfService.extractImages(file);
     }
 
-    /** Returns a JSON analysis report for a PDF. */
+    /**
+     * Returns a JSON analysis report for a PDF.
+     *
+     * <p>Deliberately free, despite being the costliest operation here — it renders every page,
+     * text-strips every page and reads every content stream. ToolCreditCostSeeder seeds
+     * analyze-pdf at 0 as part of the free tier, so pricing it is a product decision, not a
+     * defect. What bounds it meanwhile is {@link HeavyTool} admission plus its place in
+     * RateLimitFilter's heavy bucket.
+     */
     @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/analyze-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

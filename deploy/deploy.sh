@@ -110,11 +110,14 @@ caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null
 systemctl reload caddy
 log "caddy reloaded"
 
-# ── build image if missing (first-time build downloads Maven deps).
-if ! docker image inspect pdf-studio-api:homelab >/dev/null 2>&1; then
-    log "building pdf-studio-api:homelab (first-time build)"
-    (cd "$root" && docker compose -f docker-compose.homelab.yml build)
-fi
+# ── build the image.
+#
+# Unconditionally. This used to build only when the image was absent, so re-running the script
+# after a code change restarted the *old* image and the new code never shipped — every "I
+# deployed but nothing changed" has this as its first suspect. Docker layer caching means an
+# unchanged tree is still a fast no-op, so there is nothing to gain from skipping it.
+log "building pdf-studio-api:homelab"
+(cd "$root" && docker compose -f docker-compose.homelab.yml build)
 
 log "starting pdf-studio.service"
 systemctl restart pdf-studio.service
