@@ -454,6 +454,32 @@ public class PdfTools {
     private static final int JPEG_MAX_DIMENSION = 65_535;
 
     /**
+     * Pixel size {@link PDFRenderer#renderImageWithDPI} will produce for {@code page}.
+     *
+     * <p>Needed because the canvas has to be allocated before any page is rendered, and
+     * {@code Graphics2D.drawImage} silently clips rather than complaining — so a canvas measured
+     * even slightly differently from the render loses content with no error.
+     *
+     * <p>Three details have to match PDFBox exactly, and all three are properties of the PDF
+     * rather than of PDFBox: the <b>crop box</b> is what gets rendered, not the media box (they
+     * differ on trimmed scans and print-ready files); the scale is <b>floored</b>, not rounded;
+     * and a page with {@code /Rotate 90} or {@code 270} comes out with its sides swapped.
+     * Measuring the media box with rounding and no swap clipped every rotated page in half.
+     *
+     * <p>{@code PdfRenderedSizeTest} asserts this against the real renderer, so if PDFBox ever
+     * changes how it sizes a page the build fails instead of the output quietly losing content.
+     */
+    static Dimension renderedSize(PDPage page, int dpi) {
+        final float scale = dpi / 72f;
+        final PDRectangle cropBox = page.getCropBox();
+        final int width = (int) Math.max(Math.floor(cropBox.getWidth() * scale), 1);
+        final int height = (int) Math.max(Math.floor(cropBox.getHeight() * scale), 1);
+        final int rotation = page.getRotation();
+        final boolean sidesSwapped = rotation == 90 || rotation == 270;
+        return sidesSwapped ? new Dimension(height, width) : new Dimension(width, height);
+    }
+
+    /**
      * Joins the selected pages into one JPEG, laid out along {@code direction}.
      *
      * <p>Rewritten because the previous version combined pairwise: each page allocated a new
@@ -497,13 +523,11 @@ public class PdfTools {
         long maxWidth = 0;
         long maxHeight = 0;
         for (int pageIndex : selected) {
-            PDRectangle box = document.getPage(pageIndex).getMediaBox();
-            long w = Math.max(1, Math.round(box.getWidth() / 72f * dpi));
-            long h = Math.max(1, Math.round(box.getHeight() / 72f * dpi));
-            totalWidth += w;
-            totalHeight += h;
-            maxWidth = Math.max(maxWidth, w);
-            maxHeight = Math.max(maxHeight, h);
+            Dimension size = renderedSize(document.getPage(pageIndex), dpi);
+            totalWidth += size.width;
+            totalHeight += size.height;
+            maxWidth = Math.max(maxWidth, size.width);
+            maxHeight = Math.max(maxHeight, size.height);
         }
         final long gaps = (long) gap * (selected.size() - 1);
         final long canvasWidth = direction == Direction.VERTICAL ? maxWidth : totalWidth + gaps;
