@@ -16,6 +16,24 @@ public final class PurchaseTokens {
 
     private PurchaseTokens() {}
 
+    /**
+     * Builds a {@code credit_ledger.idempotency_key} for a purchase-related balance change.
+     *
+     * <p>The key must hold the token's identity — two different purchases may never share one, or
+     * the unique {@code (user_id, idempotency_key)} would silently swallow the second grant — but
+     * the column is {@code VARCHAR(100)} and a Play token runs to several hundred characters.
+     * Embedding the raw token therefore overflowed the column, and because the ledger insert is
+     * issued inside the crediting transaction, the whole grant rolled back: the buyer was charged
+     * and credited nothing. Hashing keeps the identity and fits, and is deterministic, so a retried
+     * token still collides on the unique key exactly as before.
+     *
+     * @return {@code "<prefix>:<64 hex chars>"}, or null when the token is null.
+     */
+    public static String ledgerKey(String prefix, String purchaseToken) {
+        String hashed = hash(purchaseToken);
+        return hashed == null ? null : prefix + ":" + hashed;
+    }
+
     /** @return lowercase hex SHA-256 of the token, or null when the token is null. */
     public static String hash(String purchaseToken) {
         if (purchaseToken == null) return null;

@@ -43,6 +43,13 @@ public class CreditsService {
             "pdfcraft_credits_60", 60
     );
 
+    /**
+     * Longest purchase token accepted, matching {@code purchase_audit_logs.purchase_token}
+     * (VARCHAR(512)). The guard used to allow 1024, so a token between the two lengths passed
+     * validation and then failed the audit insert as a 500 instead of a clear 400.
+     */
+    private static final int MAX_PURCHASE_TOKEN_LENGTH = 512;
+
     private final CreditAccountService accountService;
     private final CreditAccountRepository accountRepository;
     private final CreditLedgerRepository ledgerRepository;
@@ -274,7 +281,7 @@ public class CreditsService {
      */
     @Transactional
     public int purchaseCredits(String userId, String purchaseToken, String productId, String ip) {
-        if (purchaseToken == null || purchaseToken.length() > 1024) {
+        if (purchaseToken == null || purchaseToken.length() > MAX_PURCHASE_TOKEN_LENGTH) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid purchase token.");
         }
         final Integer creditsToAdd = PRODUCT_CREDITS.get(productId);
@@ -298,7 +305,7 @@ public class CreditsService {
         accountService.ensure(userId, ip);
         CreditAccount account = lockAccount(userId);
         applyDelta(account, creditsToAdd, CreditReason.PURCHASE, null,
-                "purchase:" + purchaseToken, ip);
+                PurchaseTokens.ledgerKey("purchase", purchaseToken), ip);
         try {
             saveAudit(userId, purchaseToken, result.orderId(), productId,
                     PurchaseStatus.GRANTED, creditsToAdd, ip);
@@ -350,7 +357,8 @@ public class CreditsService {
         int credits = PRODUCT_CREDITS.get(productId);
         accountService.ensure(userId, null);
         CreditAccount account = lockAccount(userId);
-        applyDelta(account, credits, CreditReason.PURCHASE, null, "purchase:" + purchaseToken, null);
+        applyDelta(account, credits, CreditReason.PURCHASE, null,
+                PurchaseTokens.ledgerKey("purchase", purchaseToken), null);
         try {
             saveAudit(userId, purchaseToken, result.orderId(), productId,
                     PurchaseStatus.GRANTED, credits, null);
@@ -380,7 +388,8 @@ public class CreditsService {
 
         CreditAccount account = accountRepository.findForUpdate(granted.getUserId()).orElse(null);
         if (account == null) return;
-        applyDelta(account, -amount, CreditReason.REVOKE, null, "revoke:" + purchaseToken, null);
+        applyDelta(account, -amount, CreditReason.REVOKE, null,
+                PurchaseTokens.ledgerKey("revoke", purchaseToken), null);
         saveAudit(granted.getUserId(), purchaseToken, granted.getOrderId(), granted.getProductId(),
                 PurchaseStatus.CREDITS_REVOKED, null, null);
         log.info("Credits revoked (refund/void): userId={} product={} -{} balance={}",
