@@ -254,7 +254,15 @@ public class PdfTools {
 
         for (COSName name : resources.getXObjectNames()) {
             PDXObject xObject;
-            try { xObject = resources.getXObject(name); } catch (IOException e) { continue; }
+            try {
+                xObject = resources.getXObject(name);
+            } catch (IOException e) {
+                // Logged rather than silently skipped: compress-pdf answers 200 either way, so an
+                // image left at full size looked to the user like a tool that simply does nothing.
+                log.warn("compress-pdf: could not read XObject {} ({}) — left uncompressed",
+                        name.getName(), e.getMessage());
+                continue;
+            }
             if (!(xObject instanceof PDImageXObject image)) continue;
 
             BufferedImage src = image.getImage();
@@ -393,6 +401,29 @@ public class PdfTools {
              PDDocument loadedDoc = PdfDocuments.load(pdfPath);
              ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
             final PDPageTree pageTree = loadedDoc.getPages();
+            final int total = loadedDoc.getNumberOfPages();
+
+            // Validated rather than trusted. The order array came straight from the client with
+            // only @NotEmpty on it, and each failure mode was worse than the last: an index past
+            // the end threw IndexOutOfBoundsException, which the handler does not recognise, so
+            // it surfaced as a 500; a repeated index added the same PDPage object to one page
+            // tree twice; and an omitted index silently *dropped that page* from the output,
+            // returning 200 — on a tool users reasonably treat as lossless.
+            final boolean[] used = new boolean[total];
+            for (final int pageIndex : order) {
+                if (pageIndex < 0 || pageIndex >= total) {
+                    throw ApiException.badRequest("Page " + pageIndex
+                            + " does not exist; this PDF has " + total + " pages.");
+                }
+                if (used[pageIndex]) {
+                    throw ApiException.badRequest("Page " + pageIndex + " is listed more than once.");
+                }
+                used[pageIndex] = true;
+            }
+            if (order.length != total) {
+                throw ApiException.badRequest("The new order must list all " + total
+                        + " pages; it lists " + order.length + ".");
+            }
 
             for (final int pageIndex : order) {
                 final PDPage page = pageTree.get(pageIndex);
@@ -539,6 +570,26 @@ public class PdfTools {
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
             final PDPageTree pt = document.getPages();
+            final int totalPages = document.getNumberOfPages();
+
+            // RangeModel carries no validation and the service only checked the list was
+            // non-empty, so a negative `from` indexed the page tree with -1 and surfaced as a
+            // 500, while `from > to` produced a zero-page PDF that went into the zip and was
+            // returned as a success.
+            if (ranges != null && (type == SplitType.SPLIT_BY_RANGE || type == SplitType.DELETE_PAGES)) {
+                for (RangeModel range : ranges) {
+                    int from = range.getFrom();
+                    int to = range.getTo();
+                    if (from < 0 || from >= totalPages) {
+                        throw ApiException.badRequest("Range start " + from
+                                + " is outside this PDF, which has " + totalPages + " pages.");
+                    }
+                    if (to < from) {
+                        throw ApiException.badRequest("Range " + from + "-" + to
+                                + " ends before it starts.");
+                    }
+                }
+            }
             if (type.equals(SplitType.FIXED_RANGE)) {
                 int totalDocs = Math.ceilDiv(document.getNumberOfPages(), fixed);
                 for (int docNo = 1; docNo <= totalDocs; docNo++) {
@@ -640,6 +691,12 @@ public class PdfTools {
                     for (int pNo = range.getFrom(); pNo < document.getNumberOfPages() && pNo <= range.getTo(); pNo++) {
                         pagesToRemove.add(pt.get(pNo));
                     }
+                }
+                // Deleting every page produced a zero-page PDF returned with a 200, which no
+                // reader will open — a failure dressed as success.
+                if (pagesToRemove.size() >= document.getNumberOfPages()) {
+                    throw ApiException.badRequest(
+                            "That would delete every page. A PDF must keep at least one.");
                 }
                 for(final var page : pagesToRemove){
                     document.removePage(page);
@@ -1263,6 +1320,12 @@ public class PdfTools {
      * Client sends top-left origin coords; PDFBox uses bottom-left, so Y is inverted.
      */
     public static byte[] redactPdf(Path pdfPath, List<RedactRegion> regions) throws IOException {
+        // The DTO declares regions with no default and nothing null-guarded it, so omitting the
+        // field NPE'd — and an NPE is not a cause the handler recognises, so it came back as a
+        // 500 rather than "you did not say what to redact".
+        if (regions == null || regions.isEmpty()) {
+            throw ApiException.badRequest("No regions to redact were given.");
+        }
         try (PDDocument doc = PdfDocuments.load(pdfPath);
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
@@ -1484,12 +1547,16 @@ public class PdfTools {
                         if (xobj instanceof PDImageXObject img) {
                             BufferedImage bi = img.getImage();
                             if (bi == null) continue;
-                            count++;
                             ByteArrayOutputStream imgBaos = new ByteArrayOutputStream();
                             ImageIO.write(bi, "png", imgBaos);
-                            zip.putNextEntry(new ZipEntry("image_" + count + ".png"));
+                            zip.putNextEntry(new ZipEntry("image_" + (count + 1) + ".png"));
                             zip.write(imgBaos.toByteArray());
                             zip.closeEntry();
+                            // Incremented only once the entry is actually written. It used to be
+                            // incremented first, with the write inside the same catch, so a
+                            // failed write still counted — which got the archive past the
+                            // count == 0 guard below and returned a truncated zip as a success.
+                            count++;
                         }
                     } catch (Exception ignore) {
                         // Skip images PDFBox/ImageIO can't decode (e.g. exotic colour spaces).
@@ -2429,10 +2496,24 @@ public class PdfTools {
             if (form != null) {
                 form.setNeedAppearances(false);
                 if (values != null) {
+                    // A field whose value will not set is reported, not skipped. It used to be
+                    // swallowed and then flatten() baked in the *empty* field — so the response
+                    // was a 200 carrying a form with the user's data missing, and nothing in it
+                    // said so. Since flattening is irreversible, a filled form that silently
+                    // lost a field is worse than a request that failed.
+                    List<String> rejected = new ArrayList<>();
                     for (Map.Entry<String, String> e : values.entrySet()) {
                         PDField field = form.getField(e.getKey());
                         if (field == null || e.getValue() == null) continue;
-                        try { field.setValue(e.getValue()); } catch (Exception ignore) { /* incompatible value */ }
+                        try {
+                            field.setValue(e.getValue());
+                        } catch (Exception incompatible) {
+                            rejected.add(e.getKey());
+                        }
+                    }
+                    if (!rejected.isEmpty()) {
+                        throw ApiException.badRequest("These fields would not accept the value given: "
+                                + String.join(", ", rejected) + ".");
                     }
                 }
                 try { form.refreshAppearances(); } catch (Exception ignore) {}
