@@ -1917,7 +1917,7 @@ public class PdfTools {
      * handing out, built from an uploaded file. {@code extractFonts} already reduced its names
      * this way; attachments did not.
      */
-    private static String safeZipEntryName(String raw, int ordinal) {
+    private static String safeZipEntryName(String raw, int ordinal, Set<String> taken) {
         String name = raw == null ? "" : raw;
         // Both separators: the producer may be on either platform, and only stripping '/' would
         // leave a Windows-style traversal intact.
@@ -1926,12 +1926,26 @@ public class PdfTools {
         name = name.replaceAll("[^a-zA-Z0-9._-]", "_");
         // Leading dots are dropped so neither ".." nor a hidden file can survive the reduction.
         while (name.startsWith(".")) name = name.substring(1);
-        return name.isBlank() ? "attachment_" + ordinal : name;
+        if (name.isBlank()) name = "attachment_" + ordinal;
+
+        // Made unique rather than skipped. Reducing the name can map two distinct attachments
+        // onto one — "notes/x.txt" and "scans/x.txt" both become "x.txt" — and a repeated entry
+        // name makes ZipOutputStream.putNextEntry throw, which would fail the whole extraction.
+        // extractFonts skips its duplicates because a font repeated across pages really is the
+        // same font; two attachments are two files and both have to come out.
+        if (taken.add(name)) return name;
+        final int dot = name.lastIndexOf('.');
+        final String base = dot <= 0 ? name : name.substring(0, dot);
+        final String ext = dot <= 0 ? "" : name.substring(dot);
+        for (int n = 2; ; n++) {
+            final String candidate = base + " (" + n + ")" + ext;
+            if (taken.add(candidate)) return candidate;
+        }
     }
 
     private static void writeEmbeddedNode(PDNameTreeNode<PDComplexFileSpecification> node,
                                           ZipOutputStream zip, int[] count) throws IOException {
-        writeEmbeddedNode(node, zip, count, new long[]{0}, new HashSet<>(), 0);
+        writeEmbeddedNode(node, zip, count, new long[]{0}, new HashSet<>(), new HashSet<>(), 0);
     }
 
     /**
@@ -1944,7 +1958,8 @@ public class PdfTools {
      */
     private static void writeEmbeddedNode(PDNameTreeNode<PDComplexFileSpecification> node,
                                           ZipOutputStream zip, int[] count, long[] written,
-                                          Set<COSDictionary> seen, int depth) throws IOException {
+                                          Set<COSDictionary> seen, Set<String> takenNames,
+                                          int depth) throws IOException {
         if (node == null || depth > MAX_NAME_TREE_DEPTH) return;
         if (!seen.add(node.getCOSObject())) return;
 
@@ -1964,14 +1979,14 @@ public class PdfTools {
                             + (MAX_EXTRACTED_BYTES / (1024 * 1024)) + " MB extraction limit.");
                 }
                 count[0]++;
-                zip.putNextEntry(new ZipEntry(safeZipEntryName(filename, count[0])));
+                zip.putNextEntry(new ZipEntry(safeZipEntryName(filename, count[0], takenNames)));
                 zip.write(content);
                 zip.closeEntry();
             }
         }
         if (node.getKids() != null) {
             for (PDNameTreeNode<PDComplexFileSpecification> kid : node.getKids()) {
-                writeEmbeddedNode(kid, zip, count, written, seen, depth + 1);
+                writeEmbeddedNode(kid, zip, count, written, seen, takenNames, depth + 1);
             }
         }
     }
