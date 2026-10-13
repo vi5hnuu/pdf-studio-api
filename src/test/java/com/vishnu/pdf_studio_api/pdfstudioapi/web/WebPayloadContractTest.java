@@ -129,6 +129,69 @@ class WebPayloadContractTest {
     }
 
     @Test
+    @DisplayName("pdf-to-jpg accepts the quality as a name and as a DPI number")
+    void pdfToJpgQualityForms() throws Exception {
+        // The DPI form is what every shipped app build sends. Jackson reads an integer as an
+        // enum *ordinal*, so 72/150/300 were all out of range and every pdf-to-jpg request was
+        // a 400 before the controller body ran — which is why the tool failed identically in
+        // zip, horizontal and vertical mode: it never looked at single or direction.
+        for (String quality : new String[]{"\"LOW\"", "\"low\"", "\"HIGH\"", "72", "150", "300"}) {
+            assertAccepts("pdf-to-jpg", "pdf-to-jpg-info",
+                    "{\"out_file_name\":\"q\",\"quality\":" + quality + ",\"single\":false}");
+        }
+        // All three modes, now that quality no longer fails first.
+        assertAccepts("pdf-to-jpg", "pdf-to-jpg-info",
+                "{\"quality\":\"LOW\",\"single\":true,\"direction\":\"VERTICAL\",\"image_gap\":4}");
+        assertAccepts("pdf-to-jpg", "pdf-to-jpg-info",
+                "{\"quality\":\"LOW\",\"single\":true,\"direction\":\"HORIZONTAL\",\"image_gap\":0}");
+    }
+
+    @Test
+    @DisplayName("page-numbers accepts the type as a name and as its label, and applies padding")
+    void pageNumbersTypeFormsAndPadding() throws Exception {
+        // The label form is what every shipped app build sends; Jackson matches constant names
+        // case-sensitively, so "X" and "page_X_of_Y" were both a 400.
+        for (String type : new String[]{"\"ONLY_X\"", "\"PAGE_X\"", "\"PAGE_X_OF_Y\"",
+                                        "\"X\"", "\"page_X\"", "\"page_X_of_Y\""}) {
+            assertAccepts("page-numbers", "page-numbers-info",
+                    "{\"page_no_type\":" + type + ",\"size\":12}");
+        }
+        // Padding was silently dropped: final fields, no setters, and a no-arg constructor
+        // Jackson preferred. It has to survive binding, not just be accepted.
+        assertAccepts("page-numbers", "page-numbers-info",
+                "{\"page_no_type\":\"ONLY_X\",\"padding\":{\"top\":5,\"left\":6,\"bottom\":7,\"right\":8}}");
+    }
+
+    @Test
+    @DisplayName("protect-pdf accepts permissions as names and as PDF bits")
+    void protectPermissionForms() throws Exception {
+        // Bits 9-12 were out of the ordinal range and produced a 400; 0 and 3-6 were valid
+        // indices and silently selected a *different* permission than the caller asked for.
+        assertAccepts("protect-pdf", "protect-pdf-info",
+                "{\"owner_password\":\"ownerpass11\",\"user_password\":\"userpass11\","
+                        + "\"user_access_permissions\":[\"PRINT\",\"FILL_IN_FORM\",\"FAITHFUL_PRINT\"]}");
+        assertAccepts("protect-pdf", "protect-pdf-info",
+                "{\"owner_password\":\"ownerpass11\",\"user_password\":\"userpass11\","
+                        + "\"user_access_permissions\":[3,9,12,0]}");
+    }
+
+    @Test
+    @DisplayName("an unreadable field is named in the 400, with what it would accept")
+    void malformedBodyNamesTheField() throws Exception {
+        var request = multipart("/api/v1/pdf-studio/pdf-to-jpg")
+                .file(file("file", pdf(2)))
+                .file(part("pdf-to-jpg-info", "{\"quality\":\"ultra\"}"));
+        MvcResult result = mockMvc.perform(request.with(user()).with(fromUniqueIp())).andReturn();
+
+        assertEquals(400, result.getResponse().getStatus());
+        String body = result.getResponse().getContentAsString();
+        // The whole point: it used to say only "the request body could not be read", which hid
+        // four tools failing every request on one wrong field.
+        assertTrue(body.contains("quality"), "the 400 should name the field, was: " + body);
+        assertTrue(body.contains("LOW"), "the 400 should list what it accepts, was: " + body);
+    }
+
+    @Test
     @DisplayName("tools that take no options work with only the file part")
     void noOptionTools() throws Exception {
         assertAccepts("sanitize-pdf", null, null);

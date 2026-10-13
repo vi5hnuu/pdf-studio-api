@@ -1,5 +1,7 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.exception;
 
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
@@ -118,9 +120,69 @@ public class GlobalExceptionHandler {
                     "Required file part '" + e.getRequestPartName() + "' is missing.";
             case MissingServletRequestParameterException e ->
                     "Required parameter '" + e.getParameterName() + "' is missing.";
-            default -> "The request body could not be read. Check the field types and try again.";
+            default -> describeUnreadableBody(ex);
         };
         return build(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST", message, ex, request);
+    }
+
+    /**
+     * Says which field could not be read, and what it would accept.
+     *
+     * <p>This used to be one fixed sentence for every unreadable body, which made a whole class of
+     * client/server mismatch effectively invisible: four tools were failing every single request
+     * on a single wrong field — a quality sent as a DPI number, a page-number format sent as its
+     * label, permissions sent as PDF bits — and all anyone ever saw, in the app and in the logs,
+     * was "the request body could not be read". Naming the field is what turns that into a
+     * five-minute diagnosis.
+     *
+     * <p>The field path and the accepted values are safe to return: the path is the caller's own
+     * JSON and the values come from our own enums. Nothing here exposes a type name, a class or a
+     * stack frame.
+     */
+    private static String describeUnreadableBody(Throwable ex) {
+        // JsonMappingException rather than MismatchedInputException: a @JsonCreator that throws
+        // surfaces as ValueInstantiationException, and a few other binding failures are plain
+        // JsonMappingExceptions. All of them carry the path, which is the part that matters.
+        JsonMappingException mismatch = null;
+        for (Throwable cause = ex; cause != null && mismatch == null; cause = cause.getCause()) {
+            if (cause instanceof JsonMappingException m) mismatch = m;
+        }
+        if (mismatch == null) {
+            return "The request body could not be read. Check the field types and try again.";
+        }
+
+        String field = mismatch.getPath().stream()
+                .map(ref -> ref.getFieldName() != null
+                        ? ref.getFieldName()
+                        : "[" + ref.getIndex() + "]")
+                .collect(Collectors.joining("."));
+        String where = field.isBlank() ? "The request body" : "Field '" + field + "'";
+
+        // An enum target knows its own legal values, and our @JsonCreators already build a
+        // message listing them — prefer that over restating it here and drifting from it.
+        String creatorMessage = creatorMessage(mismatch);
+        if (creatorMessage != null) return where + ": " + creatorMessage;
+
+        if (mismatch instanceof InvalidFormatException invalid
+                && invalid.getTargetType() != null
+                && invalid.getTargetType().isEnum()) {
+            String accepted = java.util.Arrays.stream(invalid.getTargetType().getEnumConstants())
+                    .map(String::valueOf)
+                    .collect(Collectors.joining(", "));
+            return where + " could not be read. Expected one of: " + accepted + ".";
+        }
+        return where + " could not be read. Check its type and try again.";
+    }
+
+    /** The message from an {@code IllegalArgumentException} thrown by a {@code @JsonCreator}. */
+    private static String creatorMessage(Throwable ex) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+            if (cause instanceof IllegalArgumentException iae
+                    && iae.getMessage() != null && !iae.getMessage().isBlank()) {
+                return iae.getMessage();
+            }
+        }
+        return null;
     }
 
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
