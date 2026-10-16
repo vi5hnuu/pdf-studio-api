@@ -799,6 +799,14 @@ public class PdfTools {
     }
 
     public static byte[] rotatePdf(PDDocument document,Integer fileAngle,Map<Integer,Integer> pagesAngle,Boolean maintainRatio) throws IOException {
+        // Defaulted where they are used, not only in the DTO's all-args constructor: the
+        // controller builds the request with the no-arg one when the info part is absent, so
+        // every field arrives null. `if (maintainRatio)` then unboxed a null and the tool
+        // answered 500 — the same shape as the page-numbering NPE fixed above. Both clients do
+        // send these, so this was never reachable from the app or the web; it is the kind of
+        // thing that only shows up once some other caller omits an optional field.
+        if (maintainRatio == null) maintainRatio = true; // documented default
+        if (pagesAngle == null) pagesAngle = Map.of();
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             final PDPageTree pt = document.getPages();
             for(int pNo=0;pNo<document.getNumberOfPages();pNo++){
