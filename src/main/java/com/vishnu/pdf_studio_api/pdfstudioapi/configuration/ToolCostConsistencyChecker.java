@@ -38,6 +38,7 @@ public class ToolCostConsistencyChecker implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         List<String> missing = new ArrayList<>();
+        List<String> freeButCharged = new ArrayList<>();
         int checked = 0;
 
         for (Object controller : applicationContext.getBeansWithAnnotation(RestController.class).values()) {
@@ -46,9 +47,15 @@ public class ToolCostConsistencyChecker implements ApplicationRunner {
                 ChargeCredits annotation = method.getAnnotation(ChargeCredits.class);
                 if (annotation == null) continue;
                 checked++;
-                if (!costRepository.existsById(annotation.tool())) {
-                    missing.add(annotation.tool() + " (" + method.getName() + ")");
-                }
+                costRepository.findById(annotation.tool()).ifPresentOrElse(cost -> {
+                    // A row at zero passes the existence check but still runs free, which is how
+                    // a newly priced tool can ship charging nothing: the seeder only inserts
+                    // rows it does not find, so an environment that already had the tool free
+                    // keeps that row and the new default never applies.
+                    if (cost.getBaseCredits() <= 0 && cost.getCreditsPerUnit() <= 0) {
+                        freeButCharged.add(annotation.tool() + " (" + method.getName() + ")");
+                    }
+                }, () -> missing.add(annotation.tool() + " (" + method.getName() + ")"));
             }
         }
 
@@ -57,6 +64,14 @@ public class ToolCostConsistencyChecker implements ApplicationRunner {
                     "These @ChargeCredits tools have no tool_credit_costs row and would run FREE: "
                             + String.join(", ", missing)
                             + ". Add the rows (or a default in ToolCreditCostSeeder) before starting.");
+        }
+        // Warned rather than fatal: zero may be deliberate — a promotion, or a tool being made
+        // free for a while — and taking the service down over a pricing choice would be worse
+        // than saying so loudly.
+        if (!freeButCharged.isEmpty()) {
+            log.warn("These tools are annotated @ChargeCredits but priced at 0, so they run FREE: {}."
+                            + " Reprice via PUT /api/v1/admin/tool-costs/{} if that is not intended.",
+                    String.join(", ", freeButCharged), "{toolId}");
         }
         log.info("Verified credit pricing for {} charged tool endpoints.", checked);
     }
