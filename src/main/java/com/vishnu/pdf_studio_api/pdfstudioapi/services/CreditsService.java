@@ -116,8 +116,9 @@ public class CreditsService {
 
     /** True if a debit with this idempotency key already happened (a retry). */
     public boolean alreadyCharged(String userId, String idempotencyKey) {
-        return idempotencyKey != null && !idempotencyKey.isBlank()
-                && ledgerRepository.existsByUserIdAndIdempotencyKey(userId, idempotencyKey);
+        final String key = PurchaseTokens.boundedKey(idempotencyKey);
+        return key != null && !key.isBlank()
+                && ledgerRepository.existsByUserIdAndIdempotencyKey(userId, key);
     }
 
     /**
@@ -167,6 +168,9 @@ public class CreditsService {
         accountService.ensure(userId, ip);
         CreditAccount account = lockAccount(userId);
 
+        // Bounded here rather than at the insert, so the lookup above and the row below use the
+        // same key — normalising only one of them would stop a retry deduping.
+        idempotencyKey = PurchaseTokens.boundedKey(idempotencyKey);
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
             var existing = ledgerRepository.findFirstByUserIdAndIdempotencyKey(userId, idempotencyKey);
             if (existing.isPresent()) {
@@ -193,6 +197,7 @@ public class CreditsService {
     /** Grants rewarded-ad credits, enforcing a per-day cap. Idempotent per {@code idempotencyKey}. */
     @Transactional
     public GrantResult grantRewardedAd(String userId, String idempotencyKey, String ip) {
+        idempotencyKey = PurchaseTokens.boundedKey(idempotencyKey);
         accountService.ensure(userId, ip);
         CreditAccount account = lockAccount(userId);
 

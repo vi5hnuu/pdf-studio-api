@@ -213,4 +213,26 @@ class CreditsServiceTest {
         assertEquals(0, creditsService.transferGuestBalance(account, account, null));
         assertEquals(0, creditsService.transferGuestBalance("web:never-seen-" + UUID.randomUUID(), account, null));
     }
+
+    @Test
+    @DisplayName("an over-long Idempotency-Key header is bounded, and a normal one is left alone")
+    void callerSuppliedKeysAreBounded() throws Exception {
+        // Idempotency-Key is whatever the client sends. Our app sends about 44 characters, but
+        // nothing enforced that, so a longer header reached the insert unchanged and MySQL
+        // rejected the row — a 500 on a charged request.
+        int columnLength = CreditLedger.class.getDeclaredField("idempotencyKey")
+                .getAnnotation(Column.class).length();
+
+        String ours = "19a3f2b1c4d-0123456789abcdef0123456789abcdef";
+        assertEquals(ours, PurchaseTokens.boundedKey(ours),
+                "a key that already fits must pass through, or stored rows stop matching on retry");
+
+        String huge = "k".repeat(4096);
+        assertTrue(PurchaseTokens.boundedKey(huge).length() <= columnLength);
+        // Still deterministic, so a retry of the same request still dedupes.
+        assertEquals(PurchaseTokens.boundedKey(huge), PurchaseTokens.boundedKey(huge));
+        assertNotEquals(PurchaseTokens.boundedKey(huge), PurchaseTokens.boundedKey("j".repeat(4096)));
+
+        assertNull(PurchaseTokens.boundedKey(null));
+    }
 }
