@@ -1,6 +1,7 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.CreateFormRequest.FormFieldSpec;
+import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
 import com.vishnu.pdf_studio_api.pdfstudioapi.utils.PdfTools;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -415,6 +416,218 @@ class CreateFormTest {
                 PDRadioButton group = (PDRadioButton) form.getField("colour");
                 assertNotNull(group);
                 assertEquals(2, group.getWidgets().size(), "both options belong to one radio field");
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    // ── Properties the API accepted and then dropped ──────────────────────────────────
+
+    @Test
+    void optionsInAGroupKeepDistinctOnStatesEvenWhenTheirExportValuesSanitiseTheSame() throws Exception {
+        // The sanitiser maps everything outside [A-Za-z0-9_] to '_', so a Hindi group's export
+        // values all collapsed to "___": the kids shared one on-state and selecting one option
+        // selected the whole group.
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec a = spec("radio", "gender", 200);
+            a.setExportValue("पुरुष");
+            FormFieldSpec b = spec("radio", "gender", 240);
+            b.setExportValue("महिला");
+            byte[] form = PdfTools.createForm(pdf, List.of(a, b));
+            try (PDDocument doc = Loader.loadPDF(form)) {
+                PDRadioButton radio = (PDRadioButton) doc.getDocumentCatalog()
+                        .getAcroForm().getField("gender");
+                List<String> exports = radio.getExportValues();
+                assertEquals(2, exports.size());
+                assertNotEquals(exports.get(0), exports.get(1),
+                        "two options sharing an on-state toggle together");
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
+    void aChoiceFieldGetsItsAlignmentAndFontSize() throws Exception {
+        // PDChoice extends PDVariableText, so /Q and /DA both apply. The choice branches called
+        // only applyCommonTraits, so an alignment or font size set on a dropdown was accepted
+        // and silently dropped — which is why the editor hid both controls for choice fields.
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec drop = spec("dropdown", "country", 200);
+            drop.setOptions(List.of("India", "United Kingdom"));
+            drop.setAlignment(1);
+            drop.setFontSize(11f);
+            byte[] form = PdfTools.createForm(pdf, List.of(drop));
+            try (PDDocument doc = Loader.loadPDF(form)) {
+                PDComboBox combo = (PDComboBox) doc.getDocumentCatalog()
+                        .getAcroForm().getField("country");
+                assertEquals(1, combo.getQ());
+                assertTrue(combo.getDefaultAppearance().contains("11"),
+                        "font size should reach /DA, was: " + combo.getDefaultAppearance());
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
+    void aChoiceFieldCanExportSomethingOtherThanWhatItDisplays() throws Exception {
+        // Only the display list was ever set, so the value the PDF recorded was forced to be
+        // the text shown — "United Kingdom" where the form wanted "GB".
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec drop = spec("dropdown", "country", 200);
+            drop.setOptions(List.of("India", "United Kingdom"));
+            drop.setOptionValues(List.of("IN", "GB"));
+            byte[] form = PdfTools.createForm(pdf, List.of(drop));
+            try (PDDocument doc = Loader.loadPDF(form)) {
+                PDComboBox combo = (PDComboBox) doc.getDocumentCatalog()
+                        .getAcroForm().getField("country");
+                assertEquals(List.of("IN", "GB"), combo.getOptionsExportValues());
+                assertEquals(List.of("India", "United Kingdom"), combo.getOptionsDisplayValues());
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
+    void aDefaultValueIsWrittenToDvSoResetFormRestoresIt() throws Exception {
+        // /DV was written for checkboxes only, so a reader's "Reset form" blanked every text
+        // and choice field instead of returning it to the author's default.
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec text = spec("text", "country", 200);
+            text.setValue("India");
+            byte[] form = PdfTools.createForm(pdf, List.of(text));
+            try (PDDocument doc = Loader.loadPDF(form)) {
+                PDTextField field = (PDTextField) doc.getDocumentCatalog()
+                        .getAcroForm().getField("country");
+                assertEquals("India", field.getDefaultValue());
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
+    void anEmailFieldActuallyValidates() throws Exception {
+        // applyFieldActions handled only date and number, so format=email produced a plain text
+        // box while the inspector showed a badge saying it validated.
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec email = spec("email", "contact", 200);
+            email.setFormat("email");
+            byte[] form = PdfTools.createForm(pdf, List.of(email));
+            try (PDDocument doc = Loader.loadPDF(form)) {
+                PDTextField field = (PDTextField) doc.getDocumentCatalog()
+                        .getAcroForm().getField("contact");
+                assertNotNull(field.getActions(), "no additional actions were written");
+                assertNotNull(field.getActions().getV(), "no validate action was written");
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
+    void anUnknownTypeIsRejectedRatherThanBecomingATextField() {
+        // A typo'd "combobox" fell through to the default branch and shipped as a text box,
+        // while the editor went on showing a dropdown.
+        assertThrows(ApiException.class, () -> {
+            Path pdf = onePagePdf();
+            try {
+                PdfTools.createForm(pdf, List.of(spec("combobox", "country", 200)));
+            } finally {
+                Files.deleteIfExists(pdf);
+            }
+        });
+    }
+
+    @Test
+    void aPushButtonCarriesItsAction() throws Exception {
+        // PDPushButton was the one AcroForm type with no path through the builder, and
+        // setAction was called nowhere, so submit/reset/print/link buttons were impossible.
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec button = spec("pushbutton", "reset_all", 200);
+            button.setAction("reset");
+            button.setCaption("Start again");
+            byte[] form = PdfTools.createForm(pdf, List.of(button));
+            try (PDDocument doc = Loader.loadPDF(form)) {
+                PDPushButton field = (PDPushButton) doc.getDocumentCatalog()
+                        .getAcroForm().getField("reset_all");
+                assertNotNull(field.getWidgets().get(0).getAction(), "button has no action");
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
+    void aDevanagariCaptionSurvivesInsteadOfBeingDropped() throws Exception {
+        // Helvetica is WinAnsi-only and toWinAnsi silently discarded everything above U+00FF,
+        // so a Hindi caption was written as nothing at all and the response was still a 200.
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec text = spec("text", "naam", 200);
+            text.setLabel("नाम");
+            byte[] form = PdfTools.createForm(pdf, List.of(text));
+            try (PDDocument doc = Loader.loadPDF(form)) {
+                String rendered = new org.apache.pdfbox.text.PDFTextStripper().getText(doc);
+                assertTrue(rendered.contains("नाम"),
+                        "caption missing from the page, got: " + rendered.trim());
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
+    void aCalculationSetsTheCalcOrderSoChainsEvaluateInOrder() throws Exception {
+        // calculationOrder was declared, never populated and never set, so /CO was absent and a
+        // subtotal-then-total chain evaluated in whatever order the reader picked.
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec total = spec("number", "total", 200);
+            FormFieldSpec.CalculationSpec calc = new FormFieldSpec.CalculationSpec();
+            calc.setFunction("SUM");
+            calc.setFields(List.of("a", "b"));
+            total.setCalculation(calc);
+            byte[] form = PdfTools.createForm(pdf, List.of(total));
+            try (PDDocument doc = Loader.loadPDF(form)) {
+                assertFalse(doc.getDocumentCatalog().getAcroForm().getCalcOrder().isEmpty(),
+                        "/CO was not written");
+            }
+        } finally {
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
+    void aConditionalFieldGetsShowHideLogicInTheDocument() throws Exception {
+        // FormFieldSpec.condition was sent by the editor and read nowhere, so conditional
+        // visibility worked in the app and was simply absent from the PDF.
+        Path pdf = onePagePdf();
+        try {
+            FormFieldSpec parent = spec("dropdown", "country", 200);
+            parent.setOptions(List.of("India", "Other"));
+            FormFieldSpec child = spec("text", "state", 240);
+            FormFieldSpec.Condition when = new FormFieldSpec.Condition();
+            when.setParentField("country");
+            when.setOperator("equals");
+            when.setValue("India");
+            child.setCondition(when);
+            byte[] form = PdfTools.createForm(pdf, List.of(parent, child));
+            try (PDDocument doc = Loader.loadPDF(form)) {
+                PDComboBox combo = (PDComboBox) doc.getDocumentCatalog()
+                        .getAcroForm().getField("country");
+                assertNotNull(combo.getActions(), "parent has no additional actions");
+                assertNotNull(combo.getActions().getV(),
+                        "parent carries no script to show or hide its child");
             }
         } finally {
             Files.deleteIfExists(pdf);

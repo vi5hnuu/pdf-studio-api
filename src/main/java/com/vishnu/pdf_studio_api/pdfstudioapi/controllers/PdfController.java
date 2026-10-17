@@ -467,7 +467,7 @@ public class PdfController {
     @ValidateUpload
     @PostMapping(value = "/create-form", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Resource> createForm(
-            @RequestPart("create-form-info") CreateFormRequest req,
+            @Valid @RequestPart("create-form-info") CreateFormRequest req,
             @RequestPart("file") MultipartFile file) {
         return pdfService.createForm(req.getOutFileName(), req.getFields(), file);
     }
