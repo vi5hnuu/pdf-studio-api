@@ -48,6 +48,13 @@ public class AdMobSsvVerifier {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /** Reduces an untrusted value to one log line, so it cannot forge further ones. */
+    private static String singleLine(String value) {
+        if (value == null) return "null";
+        String flattened = value.replaceAll("[\\r\\n]", "_");
+        return flattened.length() > 100 ? flattened.substring(0, 100) + "..." : flattened;
+    }
+
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5)).build();
 
@@ -104,7 +111,9 @@ public class AdMobSsvVerifier {
 
         PublicKey key = keyFor(keyId);
         if (key == null) {
-            log.warn("AdMob SSV callback names unknown key_id {}.", keyId);
+            // Stripped: keyId is URL-decoded straight from the query string of an endpoint that
+            // is permitAll, so a %0A in it would forge whole log lines.
+            log.warn("AdMob SSV callback names unknown key_id {}.", singleLine(keyId));
             return false;
         }
 

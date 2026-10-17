@@ -1,11 +1,13 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.credits;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.PurchaseStatus;
+import com.vishnu.pdf_studio_api.pdfstudioapi.model.CreditLedger;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.PurchaseAuditLog;
 import com.vishnu.pdf_studio_api.pdfstudioapi.repository.CreditLedgerRepository;
 import com.vishnu.pdf_studio_api.pdfstudioapi.repository.PurchaseAuditLogRepository;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.CreditsService;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.PurchaseTokens;
+import jakarta.persistence.Column;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -116,6 +118,44 @@ class CreditsServiceTest {
                 PurchaseTokens.hash(tokenA), PurchaseStatus.GRANTED));
         assertTrue(purchaseAuditLogRepository.existsByTokenHashAndStatus(
                 PurchaseTokens.hash(tokenB), PurchaseStatus.GRANTED));
+    }
+
+    @Test
+    @DisplayName("a purchase ledger key fits idempotency_key, however long the Play token is")
+    void purchaseLedgerKeyFitsItsColumn() throws Exception {
+        // The crediting transaction writes this key, so a key longer than the column rolls the
+        // whole grant back: the buyer is charged and credited nothing. The limit is read off the
+        // entity rather than hardcoded, so shrinking the column fails here instead of in produc-
+        // tion. A real Play token is 300+ characters.
+        int columnLength = CreditLedger.class.getDeclaredField("idempotencyKey")
+                .getAnnotation(Column.class).length();
+
+        for (String token : new String[]{"x".repeat(300), "y".repeat(1024), "z"}) {
+            for (String prefix : new String[]{"purchase", "revoke"}) {
+                String key = PurchaseTokens.ledgerKey(prefix, token);
+                assertTrue(key.length() <= columnLength,
+                        () -> prefix + " key is " + key.length() + " chars, column holds " + columnLength);
+            }
+        }
+
+        // Identity has to survive the hashing, or two purchases would share one key and the
+        // unique (user_id, idempotency_key) would silently drop the second grant.
+        assertNotEquals(PurchaseTokens.ledgerKey("purchase", "token-a"),
+                PurchaseTokens.ledgerKey("purchase", "token-b"));
+        // ...and the same token must still collide, which is what makes a retry idempotent.
+        assertEquals(PurchaseTokens.ledgerKey("purchase", "token-a"),
+                PurchaseTokens.ledgerKey("purchase", "token-a"));
+        // A revoke must not cancel out its own grant's key.
+        assertNotEquals(PurchaseTokens.ledgerKey("purchase", "token-a"),
+                PurchaseTokens.ledgerKey("revoke", "token-a"));
+    }
+
+    @Test
+    @DisplayName("a purchase token longer than its column is rejected as a 400")
+    void overlongPurchaseTokenIsRejected() {
+        var ex = assertThrows(ResponseStatusException.class, () -> creditsService.purchaseCredits(
+                newUser(), "x".repeat(513), "pdfcraft_credits_10", null));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
     @Test

@@ -52,7 +52,7 @@ public class ToolCreditCostSeeder implements ApplicationRunner {
         for (String free : List.of(
                 "merge-pdf", "reorder-pdf", "split-pdf", "rotate-pdf",
                 "get-metadata", "edit-metadata", "remove-metadata",
-                "get-bookmarks", "edit-bookmarks", "analyze-pdf", "get-form-fields",
+                "get-bookmarks", "edit-bookmarks", "get-form-fields",
                 "add-blank-pages", "duplicate-pages", "remove-blank-pages",
                 "extract-text", "sanitize-pdf", "insert-pdf", "replace-pages",
                 "rotate-image", "flip-image", "border-image", "resize-image")) {
@@ -61,6 +61,10 @@ public class ToolCreditCostSeeder implements ApplicationRunner {
 
         // ── Heavy / premium PDF tools ──
         list.add(sized("compress-pdf", 2, SizeUnit.BYTES, 1, FIVE_MB)); // +1 credit / 5 MB
+        // Renders every page, text-strips every page and reads every content stream, so it
+        // is the costliest operation here and its cost grows with the document. Priced like
+        // compress-pdf, which does comparable per-page work.
+        list.add(sized("analyze-pdf", 2, SizeUnit.BYTES, 1, FIVE_MB)); // +1 credit / 5 MB
         list.add(flat("pdf-to-word", 3));
         list.add(flat("pdf-to-excel", 3));
         list.add(flat("pdf-to-pptx", 3));

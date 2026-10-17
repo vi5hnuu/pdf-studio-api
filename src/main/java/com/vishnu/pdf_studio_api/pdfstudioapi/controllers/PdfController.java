@@ -276,7 +276,14 @@ public class PdfController {
         return pdfService.extractImages(file);
     }
 
-    /** Returns a JSON analysis report for a PDF. */
+    /**
+     * Returns a JSON analysis report for a PDF.
+     *
+     * <p>Priced: it renders every page, text-strips every page and reads every content stream,
+     * which makes it the costliest operation here. The id must match the seeded row and the
+     * app's creditToolIds entry, or the client shows "free" while this charges.
+     */
+    @ChargeCredits(tool = "analyze-pdf")
     @HeavyTool
     @ValidateUpload
     @PostMapping(value = "/analyze-pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

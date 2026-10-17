@@ -210,7 +210,9 @@ public class PdfService {
 
         try (OpenPdf opened = openPdf(file)) {
             final PDDocument document = opened.document();
-            if (document.isEncrypted()) throw new Exception("document is protected, please remove password first");
+            // A plain Exception is not one GlobalExceptionHandler.isMeaningful recognises, so
+            // this came back as a 500 — a password-protected PDF read as a server fault.
+            if (document.isEncrypted()) throw ApiException.encrypted();
 
             String text = PdfTools.extractText(document, pages);
             if (text.isBlank()) {
@@ -835,7 +837,13 @@ public class PdfService {
 
         try (OpenPdf opened = openPdf(file)) {
             final PDDocument document = opened.document();
-            if (document.isEncrypted()) throw new Exception("document is protected please remove password first");
+            if (document.isEncrypted()) throw ApiException.encrypted();
+            // app.upload.max-render-pages existed but was never enforced anywhere — both
+            // UploadValidator.pageCount and renderablePageCount had no production callers, so
+            // every rasterising tool ran to the global 2000-page cap. This tool renders each
+            // page at up to 300 DPI, so that ceiling is the difference between a slow request
+            // and an OutOfMemoryError.
+            uploadValidator.renderablePageCount(document.getNumberOfPages());
 
             byte[] imageBytes = PdfTools.pdfToImage(document, single, direction, quality, imageGap, pages);
 
@@ -888,7 +896,7 @@ public class PdfService {
         try (OpenPdf opened = openPdf(file)) {
             final PDDocument document = opened.document();
             if (toPage == null) toPage = document.getNumberOfPages() - 1;
-            if (document.isEncrypted()) throw new Exception("document is protected please remove password first");
+            if (document.isEncrypted()) throw ApiException.encrypted();
 
             byte[] doc = PdfTools.writePageNumbersToPages(document, vPos, hPos, fromPage, toPage, pageNoType, fillColor, padding, size, fontName);
 
@@ -986,7 +994,7 @@ public class PdfService {
                     .headers(headers)
                     .body(baR);
         }catch (InvalidPasswordException e){
-          throw new RuntimeException("pdf is already protected");
+          throw ApiException.badRequest("This PDF is already password protected. Remove the existing password first.");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

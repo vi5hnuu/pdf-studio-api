@@ -31,6 +31,10 @@ services:
     volumes:
       - /var/log/pdf-studio-api:/app/logs
       - ./pdf-craft-496203-bea59af63c2d.json:/run/secrets/play-service-account.json:ro
+    # An explicit limit, so MaxRAMPercentage in the Dockerfile has something real to be a
+    # percentage of. Without one the container sees the whole host and the JVM sizes its heap
+    # against RAM other services are also using.
+    mem_limit: 2g
     restart: unless-stopped
     networks: [pdf-studio-network]
 

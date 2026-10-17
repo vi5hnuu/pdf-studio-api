@@ -189,14 +189,28 @@ public class PdfTools {
         stripper.setSortByPosition(true);
         if (pages == null || pages.isEmpty()) return stripper.getText(document);
 
-        // Read page by page rather than with a start/end range, so a selection need not be
-        // contiguous — "pages 2, 5 and 9" is as valid a request as "pages 2 to 9".
+        // Grouped into contiguous runs, one getText call each, because
+        // PDFTextStripper.processPages walks the *entire* page tree on every call and skips what
+        // falls outside its range. Calling it once per page therefore cost O(pages squared) node
+        // visits — about four million at the 2000-page cap. A selection still need not be
+        // contiguous: "pages 2, 5 and 9" becomes three calls rather than three hundred.
+        List<Integer> wanted = pages.stream()
+                .filter(index -> index != null && index >= 0 && index < document.getNumberOfPages())
+                .distinct()
+                .sorted()
+                .toList();
+
         StringBuilder text = new StringBuilder();
-        for (int index : pages.stream().distinct().sorted().toList()) {
-            if (index < 0 || index >= document.getNumberOfPages()) continue;
-            stripper.setStartPage(index + 1);
-            stripper.setEndPage(index + 1);
+        int runStart = 0;
+        while (runStart < wanted.size()) {
+            int runEnd = runStart;
+            while (runEnd + 1 < wanted.size() && wanted.get(runEnd + 1) == wanted.get(runEnd) + 1) {
+                runEnd++;
+            }
+            stripper.setStartPage(wanted.get(runStart) + 1);
+            stripper.setEndPage(wanted.get(runEnd) + 1);
             text.append(stripper.getText(document));
+            runStart = runEnd + 1;
         }
         return text.toString();
     }
@@ -254,7 +268,15 @@ public class PdfTools {
 
         for (COSName name : resources.getXObjectNames()) {
             PDXObject xObject;
-            try { xObject = resources.getXObject(name); } catch (IOException e) { continue; }
+            try {
+                xObject = resources.getXObject(name);
+            } catch (IOException e) {
+                // Logged rather than silently skipped: compress-pdf answers 200 either way, so an
+                // image left at full size looked to the user like a tool that simply does nothing.
+                log.warn("compress-pdf: could not read XObject {} ({}) — left uncompressed",
+                        name.getName(), e.getMessage());
+                continue;
+            }
             if (!(xObject instanceof PDImageXObject image)) continue;
 
             BufferedImage src = image.getImage();
@@ -270,14 +292,19 @@ public class PdfTools {
 
             ByteArrayOutputStream imgBaos = new ByteArrayOutputStream();
             ImageWriter jpegWriter = ImageIO.getImageWritersByFormatName("JPEG").next();
-            ImageWriteParam jpegParams = jpegWriter.getDefaultWriteParam();
-            jpegParams.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-            jpegParams.setCompressionQuality(level.getQuality());
-            try (MemoryCacheImageOutputStream memOut = new MemoryCacheImageOutputStream(imgBaos)) {
-                jpegWriter.setOutput(memOut);
-                jpegWriter.write(null, new IIOImage(rgb, null, null), jpegParams);
+            // dispose in a finally: it holds a native encoder, and this runs once per embedded
+            // image per page, so a single failing image leaked one for every one after it.
+            try {
+                ImageWriteParam jpegParams = jpegWriter.getDefaultWriteParam();
+                jpegParams.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+                jpegParams.setCompressionQuality(level.getQuality());
+                try (MemoryCacheImageOutputStream memOut = new MemoryCacheImageOutputStream(imgBaos)) {
+                    jpegWriter.setOutput(memOut);
+                    jpegWriter.write(null, new IIOImage(rgb, null, null), jpegParams);
+                }
+            } finally {
+                jpegWriter.dispose();
             }
-            jpegWriter.dispose();
 
             PDImageXObject compressed = PDImageXObject.createFromByteArray(document, imgBaos.toByteArray(), name.getName());
             xobjectDict.setItem(name, compressed.getCOSObject());
@@ -313,7 +340,14 @@ public class PdfTools {
              ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
 
             for (MultipartFile file : files) {
-                BufferedImage bimg = ImageIO.read(file.getInputStream());
+                // try-with-resources on the part's own stream: ImageIO.read closes the
+                // ImageInputStream it wraps, never the InputStream handed to it. This endpoint
+                // takes up to app.upload.max-files parts, so that was a file descriptor leaked
+                // per image, released only whenever GC got round to it.
+                BufferedImage bimg;
+                try (var in = file.getInputStream()) {
+                    bimg = ImageIO.read(in);
+                }
                 if (bimg == null) {
                     // ImageIO returns null rather than throwing for a format it cannot decode;
                     // reading width off it produced an opaque NullPointerException.
@@ -381,6 +415,24 @@ public class PdfTools {
              PDDocument loadedDoc = PdfDocuments.load(pdfPath);
              ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
             final PDPageTree pageTree = loadedDoc.getPages();
+            final int total = loadedDoc.getNumberOfPages();
+
+            // Range-checked, and deliberately nothing more. `order` is "build a document from
+            // these pages, in this sequence", not "a permutation of every page": delete-pages
+            // sends every index except the ones being removed, extract-pages sends only the
+            // selected ones, and reverse sends them backwards. Requiring a complete permutation
+            // here would reject all three, and rejecting a repeated index would rule out using
+            // the same page twice, which the contract never forbade.
+            //
+            // The one thing genuinely broken was an out-of-range index: the page tree threw
+            // IndexOutOfBoundsException, which GlobalExceptionHandler does not recognise, so it
+            // surfaced as a 500 rather than saying which page did not exist.
+            for (final int pageIndex : order) {
+                if (pageIndex < 0 || pageIndex >= total) {
+                    throw ApiException.badRequest("Page " + pageIndex
+                            + " does not exist; this PDF has " + total + " pages.");
+                }
+            }
 
             for (final int pageIndex : order) {
                 final PDPage page = pageTree.get(pageIndex);
@@ -393,6 +445,49 @@ public class PdfTools {
         }
     }
 
+    /** JPEG stores each dimension in 16 bits, so neither side of the result can exceed this. */
+    private static final int JPEG_MAX_DIMENSION = 65_535;
+
+    /**
+     * Pixel size {@link PDFRenderer#renderImageWithDPI} will produce for {@code page}.
+     *
+     * <p>Needed because the canvas has to be allocated before any page is rendered, and
+     * {@code Graphics2D.drawImage} silently clips rather than complaining — so a canvas measured
+     * even slightly differently from the render loses content with no error.
+     *
+     * <p>Three details have to match PDFBox exactly, and all three are properties of the PDF
+     * rather than of PDFBox: the <b>crop box</b> is what gets rendered, not the media box (they
+     * differ on trimmed scans and print-ready files); the scale is <b>floored</b>, not rounded;
+     * and a page with {@code /Rotate 90} or {@code 270} comes out with its sides swapped.
+     * Measuring the media box with rounding and no swap clipped every rotated page in half.
+     *
+     * <p>{@code PdfRenderedSizeTest} asserts this against the real renderer, so if PDFBox ever
+     * changes how it sizes a page the build fails instead of the output quietly losing content.
+     */
+    static Dimension renderedSize(PDPage page, int dpi) {
+        final float scale = dpi / 72f;
+        final PDRectangle cropBox = page.getCropBox();
+        final int width = (int) Math.max(Math.floor(cropBox.getWidth() * scale), 1);
+        final int height = (int) Math.max(Math.floor(cropBox.getHeight() * scale), 1);
+        final int rotation = page.getRotation();
+        final boolean sidesSwapped = rotation == 90 || rotation == 270;
+        return sidesSwapped ? new Dimension(height, width) : new Dimension(width, height);
+    }
+
+    /**
+     * Joins the selected pages into one JPEG, laid out along {@code direction}.
+     *
+     * <p>Rewritten because the previous version combined pairwise: each page allocated a new
+     * canvas the size of everything so far and copied the lot into it, so N pages did O(N²) work
+     * and held two near-full copies at once. At 300 DPI an A4 page is about 8.7 million pixels,
+     * and {@code TYPE_INT_RGB} is four bytes each — so a few dozen pages ran to gigabytes and the
+     * tool died with an OutOfMemoryError rather than an answer. It also never checked JPEG's
+     * 65,535-pixel limit per side, which a vertical join passes at around nineteen A4 pages at
+     * 300 DPI, and it leaked two undisposed {@code Graphics2D} per page.
+     *
+     * <p>Now the final canvas is measured first, refused with a clear message if it cannot be
+     * written, and each page is drawn into it once.
+     */
     public static byte[] pdfToSingleImage(PDDocument document, Direction direction, Quality quality,
                                           Integer imageGap, List<Integer> pages) throws IOException {
         if (document == null) throw new IllegalArgumentException("pdf document is required");
@@ -400,24 +495,81 @@ public class PdfTools {
         if (direction == null) direction = Direction.VERTICAL;
         if (quality == null) quality = Quality.LOW;
         if (imageGap == null) imageGap = 0;
+        final int gap = Math.max(0, imageGap);
 
-        PDFRenderer pdfRenderer = new PDFRenderer(document);
-
-        // Combine all pages into a single image
-        BufferedImage combinedImage = null;
-        IntPredicate wanted = pageSelector(pages);
+        final IntPredicate wanted = pageSelector(pages);
+        final List<Integer> selected = new ArrayList<>();
         for (int pageIndex = 0; pageIndex < document.getNumberOfPages(); pageIndex++) {
-            if (!wanted.test(pageIndex)) continue;
-            BufferedImage pageImage = pdfRenderer.renderImageWithDPI(pageIndex, quality.getDpi(), ImageType.RGB);
-            if (combinedImage == null) combinedImage = pageImage;
-            else
-                combinedImage = direction == Direction.VERTICAL ? combineImagesVertically(combinedImage, pageImage, imageGap) : combineImagesHorizontally(combinedImage, pageImage, imageGap);
+            if (wanted.test(pageIndex)) selected.add(pageIndex);
         }
-        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-        if (combinedImage != null) ImageIO.write(combinedImage, "JPG", byteArrayOutputStream);
-        final byte[] bytes = byteArrayOutputStream.toByteArray();
-        byteArrayOutputStream.close();
-        return bytes;
+        // An empty selection used to return a zero-byte array, which the client saved as an
+        // empty .jpg and presented as a successful conversion.
+        if (selected.isEmpty()) {
+            throw ApiException.badRequest("None of the requested pages exist in this document.");
+        }
+
+        final PDFRenderer pdfRenderer = new PDFRenderer(document);
+        final int dpi = quality.getDpi();
+
+        // Measure before allocating. Page sizes vary within a document, so this walks the real
+        // boxes rather than assuming the first page speaks for the rest.
+        long totalWidth = 0;
+        long totalHeight = 0;
+        long maxWidth = 0;
+        long maxHeight = 0;
+        for (int pageIndex : selected) {
+            Dimension size = renderedSize(document.getPage(pageIndex), dpi);
+            totalWidth += size.width;
+            totalHeight += size.height;
+            maxWidth = Math.max(maxWidth, size.width);
+            maxHeight = Math.max(maxHeight, size.height);
+        }
+        final long gaps = (long) gap * (selected.size() - 1);
+        final long canvasWidth = direction == Direction.VERTICAL ? maxWidth : totalWidth + gaps;
+        final long canvasHeight = direction == Direction.VERTICAL ? totalHeight + gaps : maxHeight;
+
+        if (canvasWidth > JPEG_MAX_DIMENSION || canvasHeight > JPEG_MAX_DIMENSION) {
+            throw ApiException.badRequest(
+                    "Joining " + selected.size() + " pages at " + dpi + " DPI would be "
+                            + canvasWidth + "x" + canvasHeight + " pixels, and a JPEG cannot exceed "
+                            + JPEG_MAX_DIMENSION + " on either side. Use a lower quality, fewer pages, "
+                            + "or the separate-images option.");
+        }
+
+        BufferedImage combined =
+                new BufferedImage((int) canvasWidth, (int) canvasHeight, BufferedImage.TYPE_INT_RGB);
+        Graphics2D canvas = combined.createGraphics();
+        try {
+            // A JPEG has no transparency, so an unpainted gap would come out black.
+            canvas.setColor(Color.WHITE);
+            canvas.fillRect(0, 0, (int) canvasWidth, (int) canvasHeight);
+            int offset = 0;
+            for (int pageIndex : selected) {
+                BufferedImage pageImage =
+                        pdfRenderer.renderImageWithDPI(pageIndex, dpi, ImageType.RGB);
+                if (direction == Direction.VERTICAL) {
+                    canvas.drawImage(pageImage, 0, offset, null);
+                    offset += pageImage.getHeight() + gap;
+                } else {
+                    canvas.drawImage(pageImage, offset, 0, null);
+                    offset += pageImage.getWidth() + gap;
+                }
+                // Dropped as soon as it is drawn, so only one page render is resident at a time
+                // rather than the whole document.
+                pageImage.flush();
+            }
+        } finally {
+            // createGraphics() holds native resources. The old pairwise helpers called it twice
+            // per page and disposed neither.
+            canvas.dispose();
+        }
+
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            ImageIO.write(combined, "JPG", out);
+            return out.toByteArray();
+        } finally {
+            combined.flush();
+        }
     }
 
     public static byte[] pdfToImagesZip(PDDocument document, Quality quality, List<Integer> pages) throws IOException {
@@ -451,6 +603,26 @@ public class PdfTools {
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
             final PDPageTree pt = document.getPages();
+            final int totalPages = document.getNumberOfPages();
+
+            // RangeModel carries no validation and the service only checked the list was
+            // non-empty, so a negative `from` indexed the page tree with -1 and surfaced as a
+            // 500, while `from > to` produced a zero-page PDF that went into the zip and was
+            // returned as a success.
+            if (ranges != null && (type == SplitType.SPLIT_BY_RANGE || type == SplitType.DELETE_PAGES)) {
+                for (RangeModel range : ranges) {
+                    int from = range.getFrom();
+                    int to = range.getTo();
+                    if (from < 0 || from >= totalPages) {
+                        throw ApiException.badRequest("Range start " + from
+                                + " is outside this PDF, which has " + totalPages + " pages.");
+                    }
+                    if (to < from) {
+                        throw ApiException.badRequest("Range " + from + "-" + to
+                                + " ends before it starts.");
+                    }
+                }
+            }
             if (type.equals(SplitType.FIXED_RANGE)) {
                 int totalDocs = Math.ceilDiv(document.getNumberOfPages(), fixed);
                 for (int docNo = 1; docNo <= totalDocs; docNo++) {
@@ -471,15 +643,18 @@ public class PdfTools {
                 return zipOutputStream.toByteArray();
             } else if (type.equals(SplitType.EXTRACT_ALL_PAGES)) {
                 for (int pNo = 0; pNo < document.getNumberOfPages(); pNo++) {
-                    PDDocument docX = new PDDocument();
-                    docX.addPage(pt.get(pNo));
-                    ZipEntry entry = new ZipEntry("range_" + (pNo + 1) + ".pdf");
-                    zip.putNextEntry(entry);
-                    docX.save(baos);
-                    docX.close();
-                    zip.write(baos.toByteArray());
-                    baos.reset();
-                    zip.closeEntry();
+                    // try-with-resources: the FIXED_RANGE branch above was fixed this way and
+                    // the other three branches were missed, so a failure mid-zip leaked one
+                    // document — and its scratch file — for every remaining part.
+                    try (PDDocument docX = new PDDocument()) {
+                        docX.addPage(pt.get(pNo));
+                        ZipEntry entry = new ZipEntry("range_" + (pNo + 1) + ".pdf");
+                        zip.putNextEntry(entry);
+                        docX.save(baos);
+                        zip.write(baos.toByteArray());
+                        baos.reset();
+                        zip.closeEntry();
+                    }
                 }
                 zip.finish();
                 return zipOutputStream.toByteArray();
@@ -487,17 +662,17 @@ public class PdfTools {
                 for (int rangeNo = 0; rangeNo < ranges.size(); rangeNo++) {
                     final var range = ranges.get(rangeNo);
 
-                    PDDocument docX = new PDDocument();
-                    for (int pNo = range.getFrom(); pNo < document.getNumberOfPages() && pNo <= range.getTo(); pNo++) {
-                        docX.addPage(pt.get(pNo));
+                    try (PDDocument docX = new PDDocument()) {
+                        for (int pNo = range.getFrom(); pNo < document.getNumberOfPages() && pNo <= range.getTo(); pNo++) {
+                            docX.addPage(pt.get(pNo));
+                        }
+                        ZipEntry entry = new ZipEntry("range_" + (rangeNo + 1) + ".pdf");
+                        zip.putNextEntry(entry);
+                        docX.save(baos);
+                        zip.write(baos.toByteArray());
+                        baos.reset();
+                        zip.closeEntry();
                     }
-                    ZipEntry entry = new ZipEntry("range_" + (rangeNo + 1) + ".pdf");
-                    zip.putNextEntry(entry);
-                    docX.save(baos);
-                    docX.close();
-                    zip.write(baos.toByteArray());
-                    baos.reset();
-                    zip.closeEntry();
                 }
                 zip.finish();
                 return zipOutputStream.toByteArray();
@@ -509,13 +684,15 @@ public class PdfTools {
 
                 List<Integer> bookmarkPages = new ArrayList<>();
                 PDOutlineItem item = outline.getFirstChild();
+                Set<COSDictionary> seenOutline = new HashSet<>();
+                if (item != null) seenOutline.add(item.getCOSObject());
                 while (item != null) {
                     PDPage page = item.findDestinationPage(document);
                     if (page != null) {
                         int idx = document.getPages().indexOf(page);
                         if (idx >= 0 && !bookmarkPages.contains(idx)) bookmarkPages.add(idx);
                     }
-                    item = item.getNextSibling();
+                    item = nextOutlineSibling(item, seenOutline);
                 }
 
                 if (bookmarkPages.isEmpty()) throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "NO_BOOKMARKS",
@@ -526,17 +703,17 @@ public class PdfTools {
                 for (int i = 0; i < bookmarkPages.size() - 1; i++) {
                     int fromPage = bookmarkPages.get(i);
                     int toPage = bookmarkPages.get(i + 1) - 1;
-                    PDDocument docX = new PDDocument();
-                    for (int pNo = Math.max(0, fromPage); pNo <= toPage && pNo < document.getNumberOfPages(); pNo++) {
-                        docX.addPage(pt.get(pNo));
+                    try (PDDocument docX = new PDDocument()) {
+                        for (int pNo = Math.max(0, fromPage); pNo <= toPage && pNo < document.getNumberOfPages(); pNo++) {
+                            docX.addPage(pt.get(pNo));
+                        }
+                        ZipEntry entry = new ZipEntry("chapter_" + (i + 1) + ".pdf");
+                        zip.putNextEntry(entry);
+                        docX.save(baos);
+                        zip.write(baos.toByteArray());
+                        baos.reset();
+                        zip.closeEntry();
                     }
-                    ZipEntry entry = new ZipEntry("chapter_" + (i + 1) + ".pdf");
-                    zip.putNextEntry(entry);
-                    docX.save(baos);
-                    docX.close();
-                    zip.write(baos.toByteArray());
-                    baos.reset();
-                    zip.closeEntry();
                 }
                 zip.finish();
                 return zipOutputStream.toByteArray();
@@ -548,6 +725,12 @@ public class PdfTools {
                         pagesToRemove.add(pt.get(pNo));
                     }
                 }
+                // Deleting every page produced a zero-page PDF returned with a 200, which no
+                // reader will open — a failure dressed as success.
+                if (pagesToRemove.size() >= document.getNumberOfPages()) {
+                    throw ApiException.badRequest(
+                            "That would delete every page. A PDF must keep at least one.");
+                }
                 for(final var page : pagesToRemove){
                     document.removePage(page);
                 }
@@ -555,28 +738,6 @@ public class PdfTools {
                 return baos.toByteArray();
             }
         }
-    }
-
-    private static BufferedImage combineImagesVertically(BufferedImage image1, BufferedImage image2, Integer offset) {
-        if (offset == null) offset = 0;
-
-        int width = Math.max(image1.getWidth(), image2.getWidth());
-        int height = image1.getHeight() + image2.getHeight() + offset;
-        BufferedImage combinedImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-        combinedImage.createGraphics().drawImage(image1, 0, 0, null);
-        combinedImage.createGraphics().drawImage(image2, 0, image1.getHeight() + offset, null);
-        return combinedImage;
-    }
-
-    private static BufferedImage combineImagesHorizontally(BufferedImage image1, BufferedImage image2, Integer offset) {
-        if (offset == null) offset = 0;
-
-        int width = image1.getWidth() + image2.getWidth() + offset;
-        int height = Math.max(image1.getHeight(), image2.getHeight());
-        BufferedImage combinedImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-        combinedImage.createGraphics().drawImage(image1, 0, 0, null);
-        combinedImage.createGraphics().drawImage(image2, image1.getWidth() + offset, 0, null);
-        return combinedImage;
     }
 
     public static byte[] writePageNumbersToPages(PDDocument document, Position vPos, Position hPos, Integer fromPage, Integer toPage, PageNoType pageNoType, ColorModel fillColor, Padding padding, Integer size, Standard14Fonts.FontName fontName) throws IOException {
@@ -638,6 +799,14 @@ public class PdfTools {
     }
 
     public static byte[] rotatePdf(PDDocument document,Integer fileAngle,Map<Integer,Integer> pagesAngle,Boolean maintainRatio) throws IOException {
+        // Defaulted where they are used, not only in the DTO's all-args constructor: the
+        // controller builds the request with the no-arg one when the info part is absent, so
+        // every field arrives null. `if (maintainRatio)` then unboxed a null and the tool
+        // answered 500 — the same shape as the page-numbering NPE fixed above. Both clients do
+        // send these, so this was never reachable from the app or the web; it is the kind of
+        // thing that only shows up once some other caller omits an optional field.
+        if (maintainRatio == null) maintainRatio = true; // documented default
+        if (pagesAngle == null) pagesAngle = Map.of();
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             final PDPageTree pt = document.getPages();
             for(int pNo=0;pNo<document.getNumberOfPages();pNo++){
@@ -1192,6 +1361,12 @@ public class PdfTools {
      * Client sends top-left origin coords; PDFBox uses bottom-left, so Y is inverted.
      */
     public static byte[] redactPdf(Path pdfPath, List<RedactRegion> regions) throws IOException {
+        // The DTO declares regions with no default and nothing null-guarded it, so omitting the
+        // field NPE'd — and an NPE is not a cause the handler recognises, so it came back as a
+        // 500 rather than "you did not say what to redact".
+        if (regions == null || regions.isEmpty()) {
+            throw ApiException.badRequest("No regions to redact were given.");
+        }
         try (PDDocument doc = PdfDocuments.load(pdfPath);
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
@@ -1248,12 +1423,87 @@ public class PdfTools {
      * Duplicates selected pages by inserting {@code count} copies after each selected page.
      * Uses importPage() — required when copying pages across PDDocument instances.
      */
+    /**
+     * Largest page count a duplicate may produce.
+     *
+     * <p>The copy count came straight from the client with no upper bound anywhere, so
+     * {@code {"0": 500000}} against a one-page PDF built a half-million-page document in heap and
+     * then saved it into a ByteArrayOutputStream. The endpoint is free, so that was a 30-byte
+     * request that took the instance down. Matched to the global page cap: a duplicate cannot
+     * produce a document larger than one the service would accept as input.
+     */
+    private static final int MAX_DUPLICATED_PAGES = 2000;
+
+    /**
+     * Largest number of outline entries any bookmark walk will follow.
+     *
+     * <p>PDFBox's {@code getNextSibling()} is a bare {@code /Next} dictionary lookup with no loop
+     * detection, so a crafted PDF whose {@code /Next} points back at itself makes a sibling walk
+     * run forever. Both walks here were unguarded: one pinned a Tomcat worker, and the other
+     * appended a map per iteration so it exhausted the heap as well. Both endpoints are free and
+     * neither is admission-controlled, so a couple of hundred requests could pin every worker.
+     *
+     * <p>A visited-set on the underlying COS dictionary is the precise fix for a cycle; this
+     * ceiling additionally bounds a chain that is merely absurdly long rather than circular.
+     */
+    private static final int MAX_OUTLINE_ITEMS = 10_000;
+
+    /** Largest depth a nested outline will be followed to, bounding recursion. */
+    private static final int MAX_OUTLINE_DEPTH = 64;
+
+    /**
+     * Advances a sibling walk, returning null once the chain repeats or runs too long.
+     *
+     * <p>{@code seen} holds the COS dictionaries already visited — object identity on the parsed
+     * dictionary, which is what actually distinguishes one outline node from another.
+     */
+    private static PDOutlineItem nextOutlineSibling(PDOutlineItem item,
+                                                    Set<COSDictionary> seen) {
+        PDOutlineItem next = item.getNextSibling();
+        if (next == null) return null;
+        if (seen.size() >= MAX_OUTLINE_ITEMS) return null;
+        return seen.add(next.getCOSObject()) ? next : null;
+    }
+
+    /**
+     * Closes every document, letting none of them stop the others from being closed.
+     *
+     * <p>A failure while closing one page's document is not worth losing the rest of them to:
+     * each holds a scratch file, and leaking the remainder is strictly worse than logging.
+     */
+    private static void closeQuietly(List<PDDocument> documents) {
+        for (PDDocument document : documents) {
+            try {
+                document.close();
+            } catch (IOException e) {
+                log.warn("Could not close a split page document: {}", e.getMessage());
+            }
+        }
+    }
+
+    /** Rejects a duplicate whose result would exceed {@link #MAX_DUPLICATED_PAGES}. */
+    private static void checkDuplicateTotal(long totalPages) {
+        if (totalPages > MAX_DUPLICATED_PAGES) {
+            throw ApiException.badRequest("That would produce " + totalPages
+                    + " pages; the limit is " + MAX_DUPLICATED_PAGES + ".");
+        }
+    }
+
     public static byte[] duplicatePages(Path pdfPath, List<Integer> pageIndices, int count) throws IOException {
+        if (count < 0) {
+            throw ApiException.badRequest("count cannot be negative.");
+        }
         try (PDDocument src = PdfDocuments.load(pdfPath);
              PDDocument out = new PDDocument();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
             int total = src.getNumberOfPages();
+            long selected = 0;
+            for (int i = 0; i < total; i++) {
+                if (pageIndices.contains(i)) selected++;
+            }
+            checkDuplicateTotal(total + selected * (long) count);
+
             for (int i = 0; i < total; i++) {
                 out.importPage(src.getPage(i));
                 if (pageIndices.contains(i)) {
@@ -1279,6 +1529,20 @@ public class PdfTools {
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
             int total = src.getNumberOfPages();
+            long result = total;
+            for (Map.Entry<Integer, Integer> entry : pageCounts.entrySet()) {
+                Integer copies = entry.getValue();
+                if (copies == null) continue;
+                if (copies < 0) {
+                    throw ApiException.badRequest(
+                            "Copy count for page " + entry.getKey() + " cannot be negative.");
+                }
+                if (entry.getKey() != null && entry.getKey() >= 0 && entry.getKey() < total) {
+                    result += copies;
+                }
+            }
+            checkDuplicateTotal(result);
+
             for (int i = 0; i < total; i++) {
                 out.importPage(src.getPage(i));
                 Integer copies = pageCounts.get(i);
@@ -1324,12 +1588,16 @@ public class PdfTools {
                         if (xobj instanceof PDImageXObject img) {
                             BufferedImage bi = img.getImage();
                             if (bi == null) continue;
-                            count++;
                             ByteArrayOutputStream imgBaos = new ByteArrayOutputStream();
                             ImageIO.write(bi, "png", imgBaos);
-                            zip.putNextEntry(new ZipEntry("image_" + count + ".png"));
+                            zip.putNextEntry(new ZipEntry("image_" + (count + 1) + ".png"));
                             zip.write(imgBaos.toByteArray());
                             zip.closeEntry();
+                            // Incremented only once the entry is actually written. It used to be
+                            // incremented first, with the write inside the same catch, so a
+                            // failed write still counted — which got the archive past the
+                            // count == 0 guard below and returned a truncated zip as a success.
+                            count++;
                         }
                     } catch (Exception ignore) {
                         // Skip images PDFBox/ImageIO can't decode (e.g. exotic colour spaces).
@@ -1427,13 +1695,20 @@ public class PdfTools {
     public static byte[] splitBySize(Path pdfPath, long maxBytes) throws IOException {
         try (PDDocument src = PdfDocuments.load(pdfPath)) {
             // Splitter returns independent single-page documents (safe clones).
+            // Splitter hands back one open PDDocument per page, each with its own scratch
+            // file. close() used to sit at the end of the loop body, so a failure part-way
+            // through — a save error, or the heap giving out — leaked the current document and
+            // every one still to come.
             List<PDDocument> pages = new Splitter().split(src);
             List<byte[]> pageBytes = new ArrayList<>();
-            for (PDDocument p : pages) {
-                ByteArrayOutputStream b = new ByteArrayOutputStream();
-                p.save(b, CompressParameters.NO_COMPRESSION);
-                pageBytes.add(b.toByteArray());
-                p.close();
+            try {
+                for (PDDocument p : pages) {
+                    ByteArrayOutputStream b = new ByteArrayOutputStream();
+                    p.save(b, CompressParameters.NO_COMPRESSION);
+                    pageBytes.add(b.toByteArray());
+                }
+            } finally {
+                closeQuietly(pages);
             }
 
             ByteArrayOutputStream zipBaos = new ByteArrayOutputStream();
@@ -1602,11 +1877,17 @@ public class PdfTools {
     private static List<byte[]> pagesToBytes(Path pdfPath) throws IOException {
         try (PDDocument doc = PdfDocuments.load(pdfPath)) {
             List<byte[]> result = new ArrayList<>();
-            for (PDDocument page : new Splitter().split(doc)) {
-                ByteArrayOutputStream b = new ByteArrayOutputStream();
-                page.save(b, CompressParameters.NO_COMPRESSION);
-                result.add(b.toByteArray());
-                page.close();
+            // Same shape as splitBySize: close() in the loop body leaked every remaining
+            // document if one save failed.
+            List<PDDocument> pages = new Splitter().split(doc);
+            try {
+                for (PDDocument page : pages) {
+                    ByteArrayOutputStream b = new ByteArrayOutputStream();
+                    page.save(b, CompressParameters.NO_COMPRESSION);
+                    result.add(b.toByteArray());
+                }
+            } finally {
+                closeQuietly(pages);
             }
             return result;
         }
@@ -1629,7 +1910,67 @@ public class PdfTools {
         }
     }
 
-    private static void writeEmbeddedNode(PDNameTreeNode<PDComplexFileSpecification> node, ZipOutputStream zip, int[] count) throws IOException {
+    /** Total bytes any one extraction archive may hold uncompressed. */
+    private static final long MAX_EXTRACTED_BYTES = 256L * 1024 * 1024;
+
+    /** Deepest name tree an attachment walk will follow, bounding recursion. */
+    private static final int MAX_NAME_TREE_DEPTH = 64;
+
+    /**
+     * Makes a safe ZIP entry name out of one taken from the document.
+     *
+     * <p>An embedded file's name is whatever the PDF says it is. Used verbatim, an attachment
+     * named {@code ../../../../home/user/.ssh/authorized_keys} produced an archive that writes
+     * outside the extraction directory on any client that extracts naively — a zip slip we were
+     * handing out, built from an uploaded file. {@code extractFonts} already reduced its names
+     * this way; attachments did not.
+     */
+    private static String safeZipEntryName(String raw, int ordinal, Set<String> taken) {
+        String name = raw == null ? "" : raw;
+        // Both separators: the producer may be on either platform, and only stripping '/' would
+        // leave a Windows-style traversal intact.
+        int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+        if (slash >= 0) name = name.substring(slash + 1);
+        name = name.replaceAll("[^a-zA-Z0-9._-]", "_");
+        // Leading dots are dropped so neither ".." nor a hidden file can survive the reduction.
+        while (name.startsWith(".")) name = name.substring(1);
+        if (name.isBlank()) name = "attachment_" + ordinal;
+
+        // Made unique rather than skipped. Reducing the name can map two distinct attachments
+        // onto one — "notes/x.txt" and "scans/x.txt" both become "x.txt" — and a repeated entry
+        // name makes ZipOutputStream.putNextEntry throw, which would fail the whole extraction.
+        // extractFonts skips its duplicates because a font repeated across pages really is the
+        // same font; two attachments are two files and both have to come out.
+        if (taken.add(name)) return name;
+        final int dot = name.lastIndexOf('.');
+        final String base = dot <= 0 ? name : name.substring(0, dot);
+        final String ext = dot <= 0 ? "" : name.substring(dot);
+        for (int n = 2; ; n++) {
+            final String candidate = base + " (" + n + ")" + ext;
+            if (taken.add(candidate)) return candidate;
+        }
+    }
+
+    private static void writeEmbeddedNode(PDNameTreeNode<PDComplexFileSpecification> node,
+                                          ZipOutputStream zip, int[] count) throws IOException {
+        writeEmbeddedNode(node, zip, count, new long[]{0}, new HashSet<>(), new HashSet<>(), 0);
+    }
+
+    /**
+     * Writes one name-tree node's attachments, then its children.
+     *
+     * <p>{@code written} caps the uncompressed total: {@code PDEmbeddedFile.toByteArray()}
+     * inflates a Flate stream with no ceiling of its own, so a few-kilobyte PDF can declare a
+     * multi-gigabyte attachment and exhaust the heap. {@code seen} stops a {@code /Kids} that
+     * points back at an ancestor, which recursed until the stack gave out.
+     */
+    private static void writeEmbeddedNode(PDNameTreeNode<PDComplexFileSpecification> node,
+                                          ZipOutputStream zip, int[] count, long[] written,
+                                          Set<COSDictionary> seen, Set<String> takenNames,
+                                          int depth) throws IOException {
+        if (node == null || depth > MAX_NAME_TREE_DEPTH) return;
+        if (!seen.add(node.getCOSObject())) return;
+
         Map<String, PDComplexFileSpecification> map = node.getNames();
         if (map != null) {
             for (Map.Entry<String, PDComplexFileSpecification> e : map.entrySet()) {
@@ -1638,15 +1979,22 @@ public class PdfTools {
                 if (ef == null) continue;
                 String filename = spec.getFilename();
                 if (filename == null || filename.isBlank()) filename = e.getKey();
+
+                byte[] content = ef.toByteArray();
+                written[0] += content.length;
+                if (written[0] > MAX_EXTRACTED_BYTES) {
+                    throw ApiException.tooLarge("This PDF's attachments exceed the "
+                            + (MAX_EXTRACTED_BYTES / (1024 * 1024)) + " MB extraction limit.");
+                }
                 count[0]++;
-                zip.putNextEntry(new ZipEntry(filename));
-                zip.write(ef.toByteArray());
+                zip.putNextEntry(new ZipEntry(safeZipEntryName(filename, count[0], takenNames)));
+                zip.write(content);
                 zip.closeEntry();
             }
         }
         if (node.getKids() != null) {
             for (PDNameTreeNode<PDComplexFileSpecification> kid : node.getKids()) {
-                writeEmbeddedNode(kid, zip, count);
+                writeEmbeddedNode(kid, zip, count, written, seen, takenNames, depth + 1);
             }
         }
     }
@@ -2204,10 +2552,32 @@ public class PdfTools {
             if (form != null) {
                 form.setNeedAppearances(false);
                 if (values != null) {
+                    // A field whose value will not set is reported, not swallowed. It used to be
+                    // ignored and then flatten() baked in the *empty* field — so the response was
+                    // a 200 carrying a form with the user's data missing, and nothing said so.
+                    // Flattening is irreversible, which makes a silent loss worse than a failure.
+                    //
+                    // Signature fields are the exception, and are skipped rather than reported:
+                    // PDSignatureField.setValue(String) throws unconditionally — a signature is
+                    // not fillable as text by any caller — so there is nothing to lose and
+                    // nothing the client did wrong. Clients do send them: get-form-fields lists
+                    // them, so a form map built from that response includes one. Reporting them
+                    // would have failed every contract and agreement, which is most of what
+                    // anyone fills.
+                    List<String> rejected = new ArrayList<>();
                     for (Map.Entry<String, String> e : values.entrySet()) {
                         PDField field = form.getField(e.getKey());
                         if (field == null || e.getValue() == null) continue;
-                        try { field.setValue(e.getValue()); } catch (Exception ignore) { /* incompatible value */ }
+                        if (field instanceof PDSignatureField) continue;
+                        try {
+                            field.setValue(e.getValue());
+                        } catch (Exception incompatible) {
+                            rejected.add(e.getKey());
+                        }
+                    }
+                    if (!rejected.isEmpty()) {
+                        throw ApiException.badRequest("These fields would not accept the value given: "
+                                + String.join(", ", rejected) + ".");
                     }
                 }
                 try { form.refreshAppearances(); } catch (Exception ignore) {}
@@ -2402,16 +2772,33 @@ public class PdfTools {
         return collectOutlineItems(outline.getFirstChild(), doc);
     }
 
-    private static List<Map<String, Object>> collectOutlineItems(PDOutlineItem item, PDDocument doc) throws IOException {
+    private static List<Map<String, Object>> collectOutlineItems(PDOutlineItem item, PDDocument doc)
+            throws IOException {
+        return collectOutlineItems(item, doc, new HashSet<>(), 0);
+    }
+
+    /**
+     * Walks an outline subtree, refusing to revisit a node or to nest beyond
+     * {@link #MAX_OUTLINE_DEPTH}.
+     *
+     * <p>{@code seen} is shared across the whole traversal rather than per level, so a child
+     * pointing back at an ancestor terminates too — a cycle through {@code /First} is as
+     * reachable as one through {@code /Next}, and this used to recurse until the stack gave out.
+     */
+    private static List<Map<String, Object>> collectOutlineItems(PDOutlineItem item, PDDocument doc,
+                                                                 Set<COSDictionary> seen, int depth)
+            throws IOException {
         List<Map<String, Object>> result = new ArrayList<>();
+        if (item == null || depth > MAX_OUTLINE_DEPTH) return result;
+        if (!seen.add(item.getCOSObject())) return result;
         while (item != null) {
             Map<String, Object> entry = new java.util.LinkedHashMap<>();
             entry.put("title", item.getTitle() != null ? item.getTitle() : "");
             PDPage page = item.findDestinationPage(doc);
             entry.put("pageIndex", page != null ? doc.getPages().indexOf(page) : 0);
-            entry.put("children", collectOutlineItems(item.getFirstChild(), doc));
+            entry.put("children", collectOutlineItems(item.getFirstChild(), doc, seen, depth + 1));
             result.add(entry);
-            item = item.getNextSibling();
+            item = nextOutlineSibling(item, seen);
         }
         return result;
     }
@@ -2591,7 +2978,10 @@ public class PdfTools {
 
     public static byte[] mergePdf(String outputFileName, List<MultipartFile> files) throws Exception {
         PDFMergerUtility merger = new PDFMergerUtility();
-        merger.setDestinationFileName(outputFileName);
+        // No setDestinationFileName: it was handed the caller's raw, unsanitized out_file_name.
+        // PDFMergerUtility writes to the stream when one is set and ignores the filename, so it
+        // did nothing today — but it is a client-controlled path one line-reorder away from an
+        // arbitrary file write, and the result is returned as bytes, so it was never needed.
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
         merger.setDestinationStream(outputStream);
         merger.setDocumentMergeMode(PDFMergerUtility.DocumentMergeMode.OPTIMIZE_RESOURCES_MODE);
