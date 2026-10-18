@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.UnexpectedRollbackException;
 
@@ -56,9 +57,16 @@ public class IpGrantGuard {
         final LocalDate today = LocalDate.now(ZoneOffset.UTC);
         try {
             return counter.consume(ipHash, kind, today, cap);
-        } catch (DataIntegrityViolationException | UnexpectedRollbackException race) {
-            // Another request from this IP created today's row first. That transaction is spent;
-            // a second attempt now finds the row and takes the locking path.
+        } catch (DataIntegrityViolationException | UnexpectedRollbackException
+                 | TransientDataAccessException race) {
+            // Another request from this IP got there first. That transaction is spent; a second
+            // attempt now finds the row and takes the update path.
+            //
+            // TransientDataAccessException covers deadlock and lock-timeout, which the first two
+            // do not: a deadlock arrives as CannotAcquireLockException and used to escape this
+            // handler entirely, failing the whole request with a 500 on the balance endpoint.
+            // The counter rewrite removed the deadlock, but a retry is the right answer to any
+            // transient contention here, not just to the one shape we happened to hit.
             try {
                 return counter.consume(ipHash, kind, today, cap);
             } catch (RuntimeException stillFailing) {

@@ -1,13 +1,13 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.GrantKind;
-import com.vishnu.pdf_studio_api.pdfstudioapi.model.CreditGrantIp;
 import com.vishnu.pdf_studio_api.pdfstudioapi.repository.CreditGrantIpRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDate;
 
 /**
@@ -26,23 +26,22 @@ public class CreditGrantIpCounter {
     private final CreditGrantIpRepository repository;
 
     /**
-     * Increments today's counter for this IP and kind if the cap allows.
+     * Counts one grant attempt for this IP today and says whether it is within the cap.
      *
-     * @throws org.springframework.dao.DataIntegrityViolationException if a concurrent request
-     *         created today's row first; the caller retries, by which point the row exists
+     * <p>The Nth caller on a given IP sees N, so exactly the first {@code cap} callers are
+     * allowed. Counting and reading are separate statements but both run inside this
+     * transaction, and the counting statement is itself atomic, so two callers can never be
+     * handed the same number.
+     *
+     * @return true when the grant may proceed, false when this IP is already at its cap
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean consume(String ipHash, GrantKind kind, LocalDate date, int cap) {
-        var existing = repository.findForUpdate(ipHash, kind, date);
-        if (existing.isPresent()) {
-            CreditGrantIp counter = existing.get();
-            if (counter.getGrantCount() >= cap) return false;
-            counter.setGrantCount(counter.getGrantCount() + 1);
-            repository.save(counter);
-            return true;
-        }
-        repository.saveAndFlush(CreditGrantIp.builder()
-                .ipHash(ipHash).grantKind(kind).grantDate(date).grantCount(1).build());
-        return true;
+        repository.countOneAttempt(ipHash, kind.name(), date, Instant.now());
+        Integer used = repository.currentCount(ipHash, kind, date);
+        // A missing row here would mean the upsert did not take; allow rather than deny, which
+        // is how every other failure on this path behaves — bookkeeping must not cost a user
+        // their credits.
+        return used == null || used <= cap;
     }
 }
