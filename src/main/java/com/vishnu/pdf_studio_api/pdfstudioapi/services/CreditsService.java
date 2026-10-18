@@ -56,6 +56,7 @@ public class CreditsService {
     private final ToolCreditCostRepository costRepository;
     private final PurchaseAuditLogRepository purchaseAuditLogRepository;
     private final PlayStoreVerifier playStoreVerifier;
+    private final AuthInternalClient authInternal;
     private final CreditProperties creditProperties;
     private final IpGrantGuard ipGrantGuard;
 
@@ -281,11 +282,22 @@ public class CreditsService {
     // ── Purchases ─────────────────────────────────────────────────────────────────
 
     /**
-     * Verifies a Google Play INAPP token and credits the account exactly once.
-     * @throws ResponseStatusException on unknown product, duplicate token, or verify failure.
+     * Verifies a Google Play INAPP token and credits the purchase's owner exactly once.
+     *
+     * <p>The owner is the account Play recorded at purchase time, not whoever happens to be
+     * calling. The app attaches its user id as the obfuscated external account id, so Play is the
+     * durable record of who bought what — which matters because a session is not durable. A guest
+     * whose refresh token is rejected, or whose account the auth service purges after its expiry,
+     * silently becomes a different principal; binding the grant to the caller meant the credits
+     * landed on whichever identity happened to be live at redemption.
+     *
+     * <p>Never throws CONFLICT for an already-granted token. It used to, and the client read that
+     * as "the credits exist" and consumed the purchase — so a redelivered purchase belonging to a
+     * previous identity was spent and could never be redelivered again. The response now says who
+     * was credited and lets the caller decide.
      */
     @Transactional
-    public int purchaseCredits(String userId, String purchaseToken, String productId, String ip) {
+    public PurchaseOutcome purchaseCredits(String callerId, String purchaseToken, String productId, String ip) {
         if (purchaseToken == null || purchaseToken.length() > MAX_PURCHASE_TOKEN_LENGTH) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid purchase token.");
         }
@@ -293,34 +305,108 @@ public class CreditsService {
         if (creditsToAdd == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown product: " + productId);
         }
-        if (purchaseAuditLogRepository.existsByTokenHashAndStatus(PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "This purchase was already redeemed.");
+
+        // Cheap path first: an already-granted token needs no call to Play, because the audit row
+        // already records who the grant went to.
+        var alreadyGranted = purchaseAuditLogRepository.findFirstByTokenHashAndStatus(
+                PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED);
+        if (alreadyGranted.isPresent()) {
+            String owner = alreadyGranted.get().getUserId();
+            return new PurchaseOutcome(getBalance(callerId, ip), 0, true, owner.equals(callerId));
         }
 
         var result = playStoreVerifier.verifyInAppPurchase(productId, purchaseToken);
         if (!result.valid()) {
             if (!purchaseAuditLogRepository.existsByTokenHashAndStatus(
                     PurchaseTokens.hash(purchaseToken), PurchaseStatus.VERIFICATION_FAILED)) {
-                saveAudit(userId, purchaseToken, null, productId, PurchaseStatus.VERIFICATION_FAILED, null, ip);
+                saveAudit(callerId, purchaseToken, null, productId, PurchaseStatus.VERIFICATION_FAILED, null, ip);
             }
             throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
                     "Google Play could not verify this purchase.");
         }
 
-        accountService.ensure(userId, ip);
-        CreditAccount account = lockAccount(userId);
+        // Falls back to the caller when Play has no account id — an older client that did not
+        // attach one. reconcilePurchase makes the same allowance for the same reason.
+        final String owner = (result.accountId() == null || result.accountId().isBlank())
+                ? callerId
+                : PrincipalKey.of(playAccountAlias, result.accountId());
+
+        accountService.ensure(owner, ip);
+        CreditAccount account = lockAccount(owner);
         applyDelta(account, creditsToAdd, CreditReason.PURCHASE, null,
                 PurchaseTokens.ledgerKey("purchase", purchaseToken), ip);
         try {
-            saveAudit(userId, purchaseToken, result.orderId(), productId,
+            saveAudit(owner, purchaseToken, result.orderId(), productId,
                     PurchaseStatus.GRANTED, creditsToAdd, ip);
         } catch (DataIntegrityViolationException dup) {
-            // Concurrent grant lost the race on uq(purchase_token, GRANTED) — roll back this one.
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "This purchase was already redeemed.");
+            // A concurrent grant won the race on uq(token_hash, GRANTED). Roll this one back and
+            // let the caller re-read: the credits exist, on whichever account won.
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This purchase is being redeemed.");
         }
-        log.info("Credits purchased: userId={} product={} +{} balance={}",
-                userId, productId, creditsToAdd, account.getBalance());
-        return account.getBalance();
+        // A guest that has paid must outlive the auth service's guest expiry, or its credits are
+        // orphaned when the account is purged.
+        authInternal.retain(owner);
+
+        log.info("Credits purchased: owner={} caller={} product={} +{} balance={}",
+                owner, callerId, productId, creditsToAdd, account.getBalance());
+        final boolean toCaller = owner.equals(callerId);
+        return new PurchaseOutcome(toCaller ? account.getBalance() : getBalance(callerId, ip),
+                creditsToAdd, false, toCaller);
+    }
+
+    /**
+     * Moves a purchase's credits to the caller when the account that owns them is an abandoned
+     * guest.
+     *
+     * <p>For the case the rest of this class cannot fix on its own: a guest's session is gone —
+     * its refresh token rejected, or the account purged by the auth service's guest expiry — so
+     * the app is now a different principal, and the credits it paid for sit on an identity it can
+     * no longer authenticate as. Play still reports the purchase, which is the one durable link
+     * back to the original account.
+     *
+     * <p>Only an anonymous owner may be claimed. Holding a Play purchase token proves you are the
+     * Google account that bought it, which is fair grounds to reclaim an <em>anonymous</em>
+     * entitlement and no grounds at all to take over a real one: two people share a device, the
+     * second signs in, and nothing they can present should move the first person's credits. A
+     * full-account owner is therefore refused, and so is an owner whose type cannot be
+     * established — unknown is not permission.
+     *
+     * @return credits moved; 0 when there was nothing to move
+     */
+    @Transactional
+    public int claimPurchase(String callerId, String purchaseToken, String productId, String ip) {
+        if (purchaseToken == null || purchaseToken.length() > MAX_PURCHASE_TOKEN_LENGTH) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid purchase token.");
+        }
+        var granted = purchaseAuditLogRepository.findFirstByTokenHashAndStatus(
+                PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED);
+        if (granted.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "No redeemed purchase matches this token.");
+        }
+        final String owner = granted.get().getUserId();
+        if (owner.equals(callerId)) return 0; // already yours
+
+        // The token has to be real and still valid, or anyone could claim against a made-up one.
+        var result = playStoreVerifier.verifyInAppPurchase(productId, purchaseToken);
+        if (!result.valid()) {
+            throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
+                    "Google Play could not verify this purchase.");
+        }
+
+        if (!authInternal.isGuest(owner).orElse(false)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "This purchase belongs to a registered account. Sign in to that account to use its credits.");
+        }
+
+        // Same mechanics as signing in: drain the guest, credit the target, once.
+        int moved = transferGuestBalance(owner, callerId, ip);
+        if (moved > 0) {
+            authInternal.retain(callerId);
+            log.info("Purchase claimed: {} credit(s) moved from abandoned guest {} to {}",
+                    moved, owner, callerId);
+        }
+        return moved;
     }
 
     /**
@@ -364,6 +450,7 @@ public class CreditsService {
         CreditAccount account = lockAccount(userId);
         applyDelta(account, credits, CreditReason.PURCHASE, null,
                 PurchaseTokens.ledgerKey("purchase", purchaseToken), null);
+        authInternal.retain(userId);
         try {
             saveAudit(userId, purchaseToken, result.orderId(), productId,
                     PurchaseStatus.GRANTED, credits, null);
@@ -375,30 +462,37 @@ public class CreditsService {
                 userId, productId, credits);
     }
 
-    /** Claws back a refunded/voided purchase's credits (RTDN). Idempotent; balance may go negative. */
+    /**
+     * Claws back a refunded/voided purchase's credits. Idempotent; balance may go negative.
+     *
+     * <p>Driven by an RTDN in real time, and by the nightly sweep for anything that never arrived.
+     *
+     * @return true when this call actually revoked something, so a caller can report what it did
+     */
     @Transactional
-    public void revokeCreditsForToken(String purchaseToken) {
-        if (purchaseToken == null || purchaseToken.isBlank()) return;
+    public boolean revokeCreditsForToken(String purchaseToken) {
+        if (purchaseToken == null || purchaseToken.isBlank()) return false;
         if (purchaseAuditLogRepository.existsByTokenHashAndStatus(PurchaseTokens.hash(purchaseToken), PurchaseStatus.CREDITS_REVOKED)) {
-            return; // already handled (RTDN is at-least-once)
+            return false; // already handled (RTDN is at-least-once)
         }
         var grantedOpt = purchaseAuditLogRepository.findFirstByTokenHashAndStatus(
                 PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED);
-        if (grantedOpt.isEmpty()) return;
+        if (grantedOpt.isEmpty()) return false;
 
         var granted = grantedOpt.get();
         Integer amount = granted.getCreditsGranted();
         if (amount == null) amount = PRODUCT_CREDITS.get(granted.getProductId());
-        if (amount == null) return;
+        if (amount == null) return false;
 
         CreditAccount account = accountRepository.findForUpdate(granted.getUserId()).orElse(null);
-        if (account == null) return;
+        if (account == null) return false;
         applyDelta(account, -amount, CreditReason.REVOKE, null,
                 PurchaseTokens.ledgerKey("revoke", purchaseToken), null);
         saveAudit(granted.getUserId(), purchaseToken, granted.getOrderId(), granted.getProductId(),
                 PurchaseStatus.CREDITS_REVOKED, null, null);
         log.info("Credits revoked (refund/void): userId={} product={} -{} balance={}",
                 granted.getUserId(), granted.getProductId(), amount, account.getBalance());
+        return true;
     }
 
     // ── internal helpers ──────────────────────────────────────────────────────────
@@ -434,6 +528,19 @@ public class CreditsService {
     private java.time.Instant startOfTodayUtc() {
         return LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant();
     }
+
+    /**
+     * What a redemption did.
+     *
+     * @param callerBalance   the *caller's* balance after the call, which is what the client shows
+     * @param creditsGranted  credits added by this call; 0 when the token was already redeemed
+     * @param alreadyGranted  the token had been redeemed before, so this call changed nothing
+     * @param creditedToCaller whether the grant belongs to the caller. False means the purchase is
+     *        owned by another account and the caller's balance did not rise — the client must not
+     *        infer otherwise, which is the assumption that used to destroy purchases.
+     */
+    public record PurchaseOutcome(int callerBalance, int creditsGranted,
+                                  boolean alreadyGranted, boolean creditedToCaller) {}
 
     public record ChargeResult(int balanceRemaining, int charged, boolean alreadyCharged) {}
 

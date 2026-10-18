@@ -12,6 +12,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.FileInputStream;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -53,6 +55,48 @@ public class PlayStoreVerifier {
             log.error("Play verification error for product={}: {}", productId, e.getMessage());
             return new InAppPurchaseResult(false, null, null);
         }
+    }
+
+    /**
+     * Purchase tokens Google has voided (refund, chargeback, developer-issued refund) since
+     * [since].
+     *
+     * <p>A safety net for the real-time notifications, which are the only thing that claws credits
+     * back today. Pub/Sub gives up after its retention window, so a refund that arrives while this
+     * service is down is dropped and the credits stay spent — silently, because nothing ever looks
+     * again. Google keeps the voided list for 30 days, which is what makes a sweep possible.
+     *
+     * @return tokens to revoke, oldest first; empty when Play cannot be reached, so a failed
+     *         sweep is a no-op rather than a false "nothing was refunded"
+     */
+    public List<String> listVoidedPurchaseTokens(Instant since) {
+        final AndroidPublisher api = publisher();
+        if (api == null) {
+            log.warn("Voided-purchase sweep skipped — no service account key configured.");
+            return List.of();
+        }
+        final List<String> tokens = new ArrayList<>();
+        try {
+            String pageToken = null;
+            do {
+                var request = api.purchases().voidedpurchases()
+                        .list(packageName)
+                        .setStartTime(since.toEpochMilli());
+                if (pageToken != null) request.setToken(pageToken);
+                var response = request.execute();
+                if (response.getVoidedPurchases() != null) {
+                    response.getVoidedPurchases().forEach(v -> {
+                        if (v.getPurchaseToken() != null) tokens.add(v.getPurchaseToken());
+                    });
+                }
+                pageToken = response.getTokenPagination() == null
+                        ? null : response.getTokenPagination().getNextPageToken();
+            } while (pageToken != null);
+        } catch (Exception e) {
+            log.error("Could not list voided purchases: {}", e.getMessage());
+            return List.of();
+        }
+        return tokens;
     }
 
     private AndroidPublisher publisher() {
