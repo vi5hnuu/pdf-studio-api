@@ -71,18 +71,20 @@ public class AuthInternalClient {
     /**
      * Clears the guest expiry for the account behind [principalKey].
      *
-     * <p>Never runs inside the caller's transaction, and never on the caller's thread. Both
-     * matter: this is called straight after a purchase is written, which is to say while a
-     * {@code SELECT ... FOR UPDATE} row lock on the credit account is still held. An HTTP round
-     * trip there would hold that lock, and a pooled database connection, for as long as the auth
-     * service took to answer — up to the timeout. With a pool of ten, a slow auth service would
-     * stall every other request in the application, and retention is best-effort bookkeeping that
-     * must never be able to do that.
+     * <p>Never on the caller's thread, and never inside a caller's transaction.
      *
-     * <p>Deferred to after commit so it cannot run for a purchase that then rolls back, and
-     * handed to a small bounded pool so the request returns immediately. Dropped under saturation
-     * rather than queued: the only cost of a missed retention is the old risk returning for one
-     * account, which is a far better outcome than threads piling up behind a failing dependency.
+     * <p>Off the thread because this is best-effort bookkeeping on the purchase path: the buyer
+     * should not wait on the auth service to be told their credits arrived, and a slow dependency
+     * should not consume a request thread. It runs on a small bounded pool and is dropped under
+     * saturation rather than queued — a missed retention restores an old risk for one account,
+     * where an unbounded queue behind a failing dependency is an out-of-memory error.
+     *
+     * <p>The transaction check is defence in depth. Today every caller is deliberately
+     * non-transactional, so this runs immediately; the callers were restructured precisely so
+     * that no HTTP call happens while a pooled connection and a {@code SELECT ... FOR UPDATE}
+     * row lock are held. Deferring to after commit keeps that guarantee if this is ever called
+     * from somewhere transactional, and stops a retention being recorded for a purchase that
+     * then rolls back.
      *
      * @param principalKey the {@code alias:sub} this service keys accounts by
      */

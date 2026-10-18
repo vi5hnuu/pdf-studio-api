@@ -1,5 +1,8 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.credits;
 
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.PurchaseStatus;
+import com.vishnu.pdf_studio_api.pdfstudioapi.repository.PurchaseAuditLogRepository;
+import com.vishnu.pdf_studio_api.pdfstudioapi.util.PurchaseTokens;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.AuthInternalClient;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.CreditsService;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.PlayStoreVerifier;
@@ -9,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -37,6 +41,7 @@ class NoNetworkInTransactionTest {
     private static final String PRODUCT = "pdfcraft_credits_10";
 
     @Autowired CreditsService creditsService;
+    @Autowired PurchaseAuditLogRepository auditRepository;
 
     @MockBean PlayStoreVerifier playStoreVerifier;
     @MockBean AuthInternalClient authInternal;
@@ -115,5 +120,28 @@ class NoNetworkInTransactionTest {
         assertTrue(replay.alreadyGranted());
         assertEquals(0, replay.creditsGranted());
         assertEquals(after, creditsService.getBalance("app:" + user, null));
+    }
+
+    @Test
+    @DisplayName("a rejected purchase is still recorded, even though the call then fails")
+    void verificationFailureSurvivesTheRejection() {
+        // This used to be lost. The audit row was written and the method then threw
+        // ResponseStatusException — a RuntimeException — from inside the same transaction, so
+        // Spring rolled the row back on the way out. Every rejected purchase was silently
+        // unrecorded, which is exactly the trail you want when someone is probing with forged
+        // tokens. It survives now because the write owns a transaction that commits first.
+        when(playStoreVerifier.verifyInAppPurchase(anyString(), anyString()))
+                .thenReturn(new PlayStoreVerifier.InAppPurchaseResult(false, null, null));
+
+        final String user = "u-" + UUID.randomUUID();
+        final String token = "tok-" + UUID.randomUUID();
+
+        assertThrows(ResponseStatusException.class,
+                () -> creditsService.purchaseCredits(user, token, PRODUCT, null));
+
+        assertTrue(
+                auditRepository.existsByTokenHashAndStatus(
+                        PurchaseTokens.hash(token), PurchaseStatus.VERIFICATION_FAILED),
+                "the rejection left no audit trail");
     }
 }
