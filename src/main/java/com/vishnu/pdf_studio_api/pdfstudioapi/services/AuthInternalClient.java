@@ -8,12 +8,19 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.Optional;
 
 /**
@@ -48,13 +55,62 @@ public class AuthInternalClient {
             .build();
 
     /**
-     * Clears the guest expiry for the account behind [principalKey], if we can work out where to
-     * ask. A full account has no expiry, so the call is harmless there and auth ignores it.
+     * Runs retention off the request thread. Deliberately small and deliberately bounded: a
+     * queue that grows without limit under a failing dependency is how an out-of-memory error
+     * starts, and dropping a best-effort call is the cheaper failure.
+     */
+    private final ExecutorService retainExecutor = new ThreadPoolExecutor(
+            0, 2, 60L, TimeUnit.SECONDS, new ArrayBlockingQueue<>(64),
+            r -> {
+                Thread t = new Thread(r, "guest-retention");
+                t.setDaemon(true);
+                return t;
+            },
+            new ThreadPoolExecutor.AbortPolicy());
+
+    /**
+     * Clears the guest expiry for the account behind [principalKey].
+     *
+     * <p>Never runs inside the caller's transaction, and never on the caller's thread. Both
+     * matter: this is called straight after a purchase is written, which is to say while a
+     * {@code SELECT ... FOR UPDATE} row lock on the credit account is still held. An HTTP round
+     * trip there would hold that lock, and a pooled database connection, for as long as the auth
+     * service took to answer — up to the timeout. With a pool of ten, a slow auth service would
+     * stall every other request in the application, and retention is best-effort bookkeeping that
+     * must never be able to do that.
+     *
+     * <p>Deferred to after commit so it cannot run for a purchase that then rolls back, and
+     * handed to a small bounded pool so the request returns immediately. Dropped under saturation
+     * rather than queued: the only cost of a missed retention is the old risk returning for one
+     * account, which is a far better outcome than threads piling up behind a failing dependency.
      *
      * @param principalKey the {@code alias:sub} this service keys accounts by
      */
     public void retain(String principalKey) {
         if (internalSecret == null || internalSecret.isBlank()) return;
+
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    submitRetain(principalKey);
+                }
+            });
+            return;
+        }
+        submitRetain(principalKey);
+    }
+
+    private void submitRetain(String principalKey) {
+        try {
+            retainExecutor.execute(() -> retainNow(principalKey));
+        } catch (RejectedExecutionException saturated) {
+            log.warn("Guest retention for {} dropped: retention queue is full", principalKey);
+        }
+    }
+
+    /** The blocking call itself, always off the request thread. */
+    private void retainNow(String principalKey) {
 
         final String alias = PrincipalKey.aliasOf(principalKey);
         final String subject = PrincipalKey.subjectOf(principalKey);

@@ -57,6 +57,7 @@ public class CreditsService {
     private final PurchaseAuditLogRepository purchaseAuditLogRepository;
     private final PlayStoreVerifier playStoreVerifier;
     private final AuthInternalClient authInternal;
+    private final CreditLedgerWriter ledgerWriter;
     private final CreditProperties creditProperties;
     private final IpGrantGuard ipGrantGuard;
 
@@ -167,7 +168,7 @@ public class CreditsService {
     public ChargeResult charge(String userId, String toolId, int cost,
                                String idempotencyKey, String ip) {
         accountService.ensure(userId, ip);
-        CreditAccount account = lockAccount(userId);
+        CreditAccount account = ledgerWriter.lockAccount(userId);
 
         // Bounded here rather than at the insert, so the lookup above and the row below use the
         // same key — normalising only one of them would stop a retry deduping.
@@ -188,7 +189,7 @@ public class CreditsService {
                             + account.getBalance() + ".");
         }
 
-        applyDelta(account, -cost, CreditReason.DEBIT, toolId, idempotencyKey, ip);
+        ledgerWriter.applyDelta(account, -cost, CreditReason.DEBIT, toolId, idempotencyKey, ip);
         log.info("Charged {} credit(s) for tool={} userId={} remaining={}", cost, toolId, userId, account.getBalance());
         return new ChargeResult(account.getBalance(), cost, false);
     }
@@ -200,7 +201,7 @@ public class CreditsService {
     public GrantResult grantRewardedAd(String userId, String idempotencyKey, String ip) {
         idempotencyKey = PurchaseTokens.boundedKey(idempotencyKey);
         accountService.ensure(userId, ip);
-        CreditAccount account = lockAccount(userId);
+        CreditAccount account = ledgerWriter.lockAccount(userId);
 
         if (idempotencyKey != null && !idempotencyKey.isBlank()
                 && ledgerRepository.existsByUserIdAndIdempotencyKey(userId, idempotencyKey)) {
@@ -215,7 +216,7 @@ public class CreditsService {
                     "You've reached today's rewarded-credit limit. Come back tomorrow.");
         }
 
-        applyDelta(account, grant, CreditReason.REWARDED_AD, null, idempotencyKey, ip);
+        ledgerWriter.applyDelta(account, grant, CreditReason.REWARDED_AD, null, idempotencyKey, ip);
         return new GrantResult(account.getBalance(), grant);
     }
 
@@ -223,7 +224,7 @@ public class CreditsService {
     @Transactional
     public GrantResult claimDailyAllowance(String userId, String ip) {
         accountService.ensure(userId, ip);
-        CreditAccount account = lockAccount(userId);
+        CreditAccount account = ledgerWriter.lockAccount(userId);
 
         final LocalDate today = LocalDate.now(ZoneOffset.UTC);
         if (today.equals(account.getLastDailyClaimDate())) {
@@ -237,7 +238,7 @@ public class CreditsService {
         }
         final int grant = creditProperties.getDailyAllowance();
         account.setLastDailyClaimDate(today);
-        applyDelta(account, grant, CreditReason.DAILY, null, "daily:" + userId + ":" + today, ip);
+        ledgerWriter.applyDelta(account, grant, CreditReason.DAILY, null, "daily:" + userId + ":" + today, ip);
         return new GrantResult(account.getBalance(), grant);
     }
 
@@ -256,27 +257,8 @@ public class CreditsService {
      *
      * @return credits moved
      */
-    @Transactional
     public int transferGuestBalance(String guestUserId, String targetUserId, String ip) {
-        if (guestUserId == null || guestUserId.equals(targetUserId)) return 0;
-
-        var guestAccount = accountRepository.findForUpdate(guestUserId).orElse(null);
-        if (guestAccount == null || guestAccount.getBalance() <= 0) return 0;
-
-        final int amount = guestAccount.getBalance();
-        final String key = "guest-transfer:" + guestUserId;
-
-        // Already moved (a retried sign-in) — leave both balances alone.
-        if (ledgerRepository.existsByUserIdAndIdempotencyKey(targetUserId, key)) return 0;
-
-        accountService.ensure(targetUserId, ip);
-        CreditAccount target = lockAccount(targetUserId);
-
-        applyDelta(guestAccount, -amount, CreditReason.TRANSFER, null, key, ip);
-        applyDelta(target, amount, CreditReason.TRANSFER, null, key, ip);
-
-        log.info("Transferred {} credit(s) from guest {} to {}", amount, guestUserId, targetUserId);
-        return amount;
+        return ledgerWriter.transferGuestBalance(guestUserId, targetUserId, ip);
     }
 
     // ── Purchases ─────────────────────────────────────────────────────────────────
@@ -296,7 +278,9 @@ public class CreditsService {
      * previous identity was spent and could never be redelivered again. The response now says who
      * was credited and lets the caller decide.
      */
-    @Transactional
+    // Deliberately NOT @Transactional. Verifying with Play is a network round trip, and holding
+    // a pooled connection across it — then a row lock, once the account is locked — is how a slow
+    // dependency stalls the whole application. The write below owns its own short transaction.
     public PurchaseOutcome purchaseCredits(String callerId, String purchaseToken, String productId, String ip) {
         if (purchaseToken == null || purchaseToken.length() > MAX_PURCHASE_TOKEN_LENGTH) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid purchase token.");
@@ -317,10 +301,7 @@ public class CreditsService {
 
         var result = playStoreVerifier.verifyInAppPurchase(productId, purchaseToken);
         if (!result.valid()) {
-            if (!purchaseAuditLogRepository.existsByTokenHashAndStatus(
-                    PurchaseTokens.hash(purchaseToken), PurchaseStatus.VERIFICATION_FAILED)) {
-                saveAudit(callerId, purchaseToken, null, productId, PurchaseStatus.VERIFICATION_FAILED, null, ip);
-            }
+            ledgerWriter.recordVerificationFailure(callerId, purchaseToken, productId, ip);
             throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
                     "Google Play could not verify this purchase.");
         }
@@ -331,26 +312,17 @@ public class CreditsService {
                 ? callerId
                 : PrincipalKey.of(playAccountAlias, result.accountId());
 
-        accountService.ensure(owner, ip);
-        CreditAccount account = lockAccount(owner);
-        applyDelta(account, creditsToAdd, CreditReason.PURCHASE, null,
-                PurchaseTokens.ledgerKey("purchase", purchaseToken), ip);
-        try {
-            saveAudit(owner, purchaseToken, result.orderId(), productId,
-                    PurchaseStatus.GRANTED, creditsToAdd, ip);
-        } catch (DataIntegrityViolationException dup) {
-            // A concurrent grant won the race on uq(token_hash, GRANTED). Roll this one back and
-            // let the caller re-read: the credits exist, on whichever account won.
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "This purchase is being redeemed.");
-        }
+        final int ownerBalance = ledgerWriter.grantPurchase(
+                owner, purchaseToken, productId, result.orderId(), creditsToAdd, ip);
+
         // A guest that has paid must outlive the auth service's guest expiry, or its credits are
-        // orphaned when the account is purged.
+        // orphaned when the account is purged. Non-blocking; see AuthInternalClient.retain.
         authInternal.retain(owner);
 
         log.info("Credits purchased: owner={} caller={} product={} +{} balance={}",
-                owner, callerId, productId, creditsToAdd, account.getBalance());
+                owner, callerId, productId, creditsToAdd, ownerBalance);
         final boolean toCaller = owner.equals(callerId);
-        return new PurchaseOutcome(toCaller ? account.getBalance() : getBalance(callerId, ip),
+        return new PurchaseOutcome(toCaller ? ownerBalance : getBalance(callerId, ip),
                 creditsToAdd, false, toCaller);
     }
 
@@ -373,7 +345,8 @@ public class CreditsService {
      *
      * @return credits moved; 0 when there was nothing to move
      */
-    @Transactional
+    // Not @Transactional: verifying with Play and asking auth what kind of account owns the
+    // purchase are both network calls, and the transfer below owns its own transaction.
     public int claimPurchase(String callerId, String purchaseToken, String productId, String ip) {
         if (purchaseToken == null || purchaseToken.length() > MAX_PURCHASE_TOKEN_LENGTH) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid purchase token.");
@@ -400,7 +373,7 @@ public class CreditsService {
         }
 
         // Same mechanics as signing in: drain the guest, credit the target, once.
-        int moved = transferGuestBalance(owner, callerId, ip);
+        int moved = ledgerWriter.transferGuestBalance(owner, callerId, ip);
         if (moved > 0) {
             authInternal.retain(callerId);
             log.info("Purchase claimed: {} credit(s) moved from abandoned guest {} to {}",
@@ -421,14 +394,18 @@ public class CreditsService {
      * this logs and does nothing rather than guessing an account to credit; the client's own
      * redemption still works.
      */
-    @Transactional
+    // Not @Transactional, for the same reason as purchaseCredits: this runs from the RTDN
+    // webhook, which Pub/Sub can deliver in bursts, and a Play call per delivery inside a
+    // transaction would hold one of ten pooled connections for each.
     public void reconcilePurchase(String purchaseToken, String productId) {
         if (purchaseToken == null || purchaseToken.isBlank()) return;
-        if (PRODUCT_CREDITS.get(productId) == null) {
+        final Integer credits = PRODUCT_CREDITS.get(productId);
+        if (credits == null) {
             log.warn("RTDN for unknown product '{}' — ignoring.", productId);
             return;
         }
-        if (purchaseAuditLogRepository.existsByTokenHashAndStatus(PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED)) {
+        if (purchaseAuditLogRepository.existsByTokenHashAndStatus(
+                PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED)) {
             return; // already credited, by the client or a previous delivery
         }
 
@@ -445,19 +422,9 @@ public class CreditsService {
         // Play purchases only ever originate in the mobile app, so the raw subject the client
         // attached is namespaced with that issuer's alias to match how the account is keyed.
         final String userId = PrincipalKey.of(playAccountAlias, result.accountId());
-        int credits = PRODUCT_CREDITS.get(productId);
-        accountService.ensure(userId, null);
-        CreditAccount account = lockAccount(userId);
-        applyDelta(account, credits, CreditReason.PURCHASE, null,
-                PurchaseTokens.ledgerKey("purchase", purchaseToken), null);
+        ledgerWriter.grantPurchase(userId, purchaseToken, productId, result.orderId(), credits, null);
         authInternal.retain(userId);
-        try {
-            saveAudit(userId, purchaseToken, result.orderId(), productId,
-                    PurchaseStatus.GRANTED, credits, null);
-        } catch (DataIntegrityViolationException dup) {
-            // The client redeemed it concurrently — that grant stands, so undo this one.
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "This purchase was already redeemed.");
-        }
+
         log.info("Reconciled unredeemed purchase from RTDN: userId={} product={} +{}",
                 userId, productId, credits);
     }
@@ -486,9 +453,9 @@ public class CreditsService {
 
         CreditAccount account = accountRepository.findForUpdate(granted.getUserId()).orElse(null);
         if (account == null) return false;
-        applyDelta(account, -amount, CreditReason.REVOKE, null,
+        ledgerWriter.applyDelta(account, -amount, CreditReason.REVOKE, null,
                 PurchaseTokens.ledgerKey("revoke", purchaseToken), null);
-        saveAudit(granted.getUserId(), purchaseToken, granted.getOrderId(), granted.getProductId(),
+        ledgerWriter.saveAudit(granted.getUserId(), purchaseToken, granted.getOrderId(), granted.getProductId(),
                 PurchaseStatus.CREDITS_REVOKED, null, null);
         log.info("Credits revoked (refund/void): userId={} product={} -{} balance={}",
                 granted.getUserId(), granted.getProductId(), amount, account.getBalance());
@@ -497,33 +464,6 @@ public class CreditsService {
 
     // ── internal helpers ──────────────────────────────────────────────────────────
 
-    private CreditAccount lockAccount(String userId) {
-        return accountRepository.findForUpdate(userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found."));
-    }
-
-    /** Applies a signed delta to the locked account and writes the matching ledger row. */
-    private void applyDelta(CreditAccount account, int delta, CreditReason reason,
-                            String toolId, String idempotencyKey, String ip) {
-        account.setBalance(account.getBalance() + delta);
-        accountRepository.save(account);
-        ledgerRepository.save(CreditLedger.builder()
-                .userId(account.getUserId())
-                .toolId(toolId)
-                .delta(delta)
-                .reason(reason)
-                .idempotencyKey(idempotencyKey)
-                .balanceAfter(account.getBalance())
-                .ip(ip)
-                .build());
-    }
-
-    private void saveAudit(String userId, String token, String orderId, String productId,
-                           PurchaseStatus status, Integer creditsGranted, String ip) {
-        purchaseAuditLogRepository.save(PurchaseAuditLog.builder()
-                .userId(userId).purchaseToken(token).orderId(orderId).productId(productId)
-                .status(status).creditsGranted(creditsGranted).ip(ip).build());
-    }
 
     private java.time.Instant startOfTodayUtc() {
         return LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant();
