@@ -6,6 +6,11 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
  * Answers "is this build still supported, and may I ask this user for a rating?".
  *
@@ -20,6 +25,25 @@ public class AppConfigService {
     private final AppReleaseConfigRepository repository;
 
     /**
+     * The rows, briefly cached by platform.
+     *
+     * <p>Every launch and every foreground of every install asks this question, and the answer
+     * changes perhaps a few times a year — so without a cache the busiest endpoint in the service
+     * would also be the one doing a database round trip for a value that is effectively constant.
+     * A short window means an edit still takes effect on its own, without anyone restarting
+     * anything, which is the whole point of keeping this in a table.
+     */
+    private static final Duration CACHE_TTL = Duration.ofMinutes(1);
+
+    private final Map<String, CachedConfig> cache = new ConcurrentHashMap<>();
+
+    private record CachedConfig(AppReleaseConfig config, Instant readAt) {
+        boolean isFresh() {
+            return config != null && Duration.between(readAt, Instant.now()).compareTo(CACHE_TTL) < 0;
+        }
+    }
+
+    /**
      * Configuration for a platform and the build asking.
      *
      * <p>No row means nothing is enforced. That is the important case, not an edge case: an
@@ -32,7 +56,7 @@ public class AppConfigService {
     @Transactional(readOnly = true)
     public AppConfigView forClient(String platform, int build) {
         if (platform == null || platform.isBlank()) return AppConfigView.unrestricted();
-        AppReleaseConfig config = repository.findById(platform.trim().toUpperCase()).orElse(null);
+        AppReleaseConfig config = lookup(platform.trim().toUpperCase());
         if (config == null) return AppConfigView.unrestricted();
 
         // A client that did not report its build is not gated. Refusing to run on a missing
@@ -46,6 +70,15 @@ public class AppConfigService {
                 config.getUpdateMessage(), config.getStoreUrl(),
                 config.getRatingMinSuccesses(), config.getRatingMinDaysInstalled(),
                 config.getRatingMinDaysBetweenAsks());
+    }
+
+    /** The row for a platform, from cache when it is fresh. A miss is cached too, as null. */
+    private AppReleaseConfig lookup(String platform) {
+        CachedConfig cached = cache.get(platform);
+        if (cached != null && cached.isFresh()) return cached.config();
+        AppReleaseConfig config = repository.findById(platform).orElse(null);
+        cache.put(platform, new CachedConfig(config, Instant.now()));
+        return config;
     }
 
     /**
