@@ -69,6 +69,7 @@ public class BillingWebhookController {
         try {
             JsonNode voided = notification.get("voidedPurchaseNotification");
             if (voided != null && voided.hasNonNull("purchaseToken")) {
+                log.info("Play RTDN: voidedPurchaseNotification accepted");
                 creditsService.revokeCreditsForToken(voided.get("purchaseToken").asText());
                 return ResponseEntity.ok().build();
             }
@@ -77,10 +78,19 @@ public class BillingWebhookController {
             // so the server credits it here rather than leaving the user paid-but-uncredited.
             JsonNode oneTime = notification.get("oneTimeProductNotification");
             if (oneTime != null && oneTime.hasNonNull("purchaseToken") && oneTime.hasNonNull("sku")) {
+                log.info("Play RTDN: oneTimeProductNotification accepted for sku={}",
+                        oneTime.get("sku").asText());
                 creditsService.reconcilePurchase(
                         oneTime.get("purchaseToken").asText(), oneTime.get("sku").asText());
+                return ResponseEntity.ok().build();
             }
-            // testNotification and anything unrecognised are intentionally ignored.
+
+            // A delivery that reaches here was authorized and parsed; saying so is what makes a
+            // working webhook distinguishable from one that is never called. Without it the
+            // success path was completely silent, so the only way to tell "working" from "not
+            // arriving" was to read the Pub/Sub metrics.
+            log.info("Play RTDN: accepted and ignored ({})",
+                    notification.has("testNotification") ? "testNotification" : "unrecognised type");
             return ResponseEntity.ok().build();
 
         } catch (Exception processingFailure) {

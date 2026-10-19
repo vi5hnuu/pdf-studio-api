@@ -45,7 +45,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     /** Tool and credit endpoints are limited; docs and health are not. */
     private static final String[] GUARDED_PREFIXES = {
-            "/api/v1/pdf-studio/", "/api/v1/image-studio/", "/api/v1/credits/"
+            "/api/v1/pdf-studio/", "/api/v1/image-studio/", "/api/v1/credits/",
+            // Unauthenticated, so the per-IP bucket is the only thing standing between it and
+            // anyone who wants to call it in a loop. Every app foreground makes one request
+            // legitimately, which is reason enough to bound the illegitimate ones.
+            "/api/v1/app-config"
     };
 
     /**

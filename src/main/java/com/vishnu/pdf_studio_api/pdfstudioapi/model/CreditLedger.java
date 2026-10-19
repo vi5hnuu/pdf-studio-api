@@ -53,7 +53,12 @@ public class CreditLedger {
     private CreditReason reason;
 
     /** Client- or server-supplied key making the operation idempotent; null = not deduped. */
-    @Column(name = "idempotency_key", length = 100)
+    /**
+     * Widened to 512 by V3 to match CreditsService.MAX_PURCHASE_TOKEN_LENGTH, so the column can
+     * hold anything the service accepts. The service itself stores a hash for purchase keys and
+     * bounds caller-supplied ones, so in practice nothing written here exceeds about 80.
+     */
+    @Column(name = "idempotency_key", length = 512)
     private String idempotencyKey;
 
     @Column(name = "balance_after", nullable = false)

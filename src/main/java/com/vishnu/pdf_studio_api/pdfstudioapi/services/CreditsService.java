@@ -12,7 +12,6 @@ import org.springframework.beans.factory.annotation.Value;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.PurchaseTokens;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,6 +55,8 @@ public class CreditsService {
     private final ToolCreditCostRepository costRepository;
     private final PurchaseAuditLogRepository purchaseAuditLogRepository;
     private final PlayStoreVerifier playStoreVerifier;
+    private final AuthInternalClient authInternal;
+    private final CreditLedgerWriter ledgerWriter;
     private final CreditProperties creditProperties;
     private final IpGrantGuard ipGrantGuard;
 
@@ -116,8 +117,9 @@ public class CreditsService {
 
     /** True if a debit with this idempotency key already happened (a retry). */
     public boolean alreadyCharged(String userId, String idempotencyKey) {
-        return idempotencyKey != null && !idempotencyKey.isBlank()
-                && ledgerRepository.existsByUserIdAndIdempotencyKey(userId, idempotencyKey);
+        final String key = PurchaseTokens.boundedKey(idempotencyKey);
+        return key != null && !key.isBlank()
+                && ledgerRepository.existsByUserIdAndIdempotencyKey(userId, key);
     }
 
     /**
@@ -165,8 +167,11 @@ public class CreditsService {
     public ChargeResult charge(String userId, String toolId, int cost,
                                String idempotencyKey, String ip) {
         accountService.ensure(userId, ip);
-        CreditAccount account = lockAccount(userId);
+        CreditAccount account = ledgerWriter.lockAccount(userId);
 
+        // Bounded here rather than at the insert, so the lookup above and the row below use the
+        // same key — normalising only one of them would stop a retry deduping.
+        idempotencyKey = PurchaseTokens.boundedKey(idempotencyKey);
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
             var existing = ledgerRepository.findFirstByUserIdAndIdempotencyKey(userId, idempotencyKey);
             if (existing.isPresent()) {
@@ -183,7 +188,7 @@ public class CreditsService {
                             + account.getBalance() + ".");
         }
 
-        applyDelta(account, -cost, CreditReason.DEBIT, toolId, idempotencyKey, ip);
+        ledgerWriter.applyDelta(account, -cost, CreditReason.DEBIT, toolId, idempotencyKey, ip);
         log.info("Charged {} credit(s) for tool={} userId={} remaining={}", cost, toolId, userId, account.getBalance());
         return new ChargeResult(account.getBalance(), cost, false);
     }
@@ -193,8 +198,9 @@ public class CreditsService {
     /** Grants rewarded-ad credits, enforcing a per-day cap. Idempotent per {@code idempotencyKey}. */
     @Transactional
     public GrantResult grantRewardedAd(String userId, String idempotencyKey, String ip) {
+        idempotencyKey = PurchaseTokens.boundedKey(idempotencyKey);
         accountService.ensure(userId, ip);
-        CreditAccount account = lockAccount(userId);
+        CreditAccount account = ledgerWriter.lockAccount(userId);
 
         if (idempotencyKey != null && !idempotencyKey.isBlank()
                 && ledgerRepository.existsByUserIdAndIdempotencyKey(userId, idempotencyKey)) {
@@ -209,7 +215,7 @@ public class CreditsService {
                     "You've reached today's rewarded-credit limit. Come back tomorrow.");
         }
 
-        applyDelta(account, grant, CreditReason.REWARDED_AD, null, idempotencyKey, ip);
+        ledgerWriter.applyDelta(account, grant, CreditReason.REWARDED_AD, null, idempotencyKey, ip);
         return new GrantResult(account.getBalance(), grant);
     }
 
@@ -217,7 +223,7 @@ public class CreditsService {
     @Transactional
     public GrantResult claimDailyAllowance(String userId, String ip) {
         accountService.ensure(userId, ip);
-        CreditAccount account = lockAccount(userId);
+        CreditAccount account = ledgerWriter.lockAccount(userId);
 
         final LocalDate today = LocalDate.now(ZoneOffset.UTC);
         if (today.equals(account.getLastDailyClaimDate())) {
@@ -231,7 +237,7 @@ public class CreditsService {
         }
         final int grant = creditProperties.getDailyAllowance();
         account.setLastDailyClaimDate(today);
-        applyDelta(account, grant, CreditReason.DAILY, null, "daily:" + userId + ":" + today, ip);
+        ledgerWriter.applyDelta(account, grant, CreditReason.DAILY, null, "daily:" + userId + ":" + today, ip);
         return new GrantResult(account.getBalance(), grant);
     }
 
@@ -250,37 +256,31 @@ public class CreditsService {
      *
      * @return credits moved
      */
-    @Transactional
     public int transferGuestBalance(String guestUserId, String targetUserId, String ip) {
-        if (guestUserId == null || guestUserId.equals(targetUserId)) return 0;
-
-        var guestAccount = accountRepository.findForUpdate(guestUserId).orElse(null);
-        if (guestAccount == null || guestAccount.getBalance() <= 0) return 0;
-
-        final int amount = guestAccount.getBalance();
-        final String key = "guest-transfer:" + guestUserId;
-
-        // Already moved (a retried sign-in) — leave both balances alone.
-        if (ledgerRepository.existsByUserIdAndIdempotencyKey(targetUserId, key)) return 0;
-
-        accountService.ensure(targetUserId, ip);
-        CreditAccount target = lockAccount(targetUserId);
-
-        applyDelta(guestAccount, -amount, CreditReason.TRANSFER, null, key, ip);
-        applyDelta(target, amount, CreditReason.TRANSFER, null, key, ip);
-
-        log.info("Transferred {} credit(s) from guest {} to {}", amount, guestUserId, targetUserId);
-        return amount;
+        return ledgerWriter.transferGuestBalance(guestUserId, targetUserId, ip);
     }
 
     // ── Purchases ─────────────────────────────────────────────────────────────────
 
     /**
-     * Verifies a Google Play INAPP token and credits the account exactly once.
-     * @throws ResponseStatusException on unknown product, duplicate token, or verify failure.
+     * Verifies a Google Play INAPP token and credits the purchase's owner exactly once.
+     *
+     * <p>The owner is the account Play recorded at purchase time, not whoever happens to be
+     * calling. The app attaches its user id as the obfuscated external account id, so Play is the
+     * durable record of who bought what — which matters because a session is not durable. A guest
+     * whose refresh token is rejected, or whose account the auth service purges after its expiry,
+     * silently becomes a different principal; binding the grant to the caller meant the credits
+     * landed on whichever identity happened to be live at redemption.
+     *
+     * <p>Never throws CONFLICT for an already-granted token. It used to, and the client read that
+     * as "the credits exist" and consumed the purchase — so a redelivered purchase belonging to a
+     * previous identity was spent and could never be redelivered again. The response now says who
+     * was credited and lets the caller decide.
      */
-    @Transactional
-    public int purchaseCredits(String userId, String purchaseToken, String productId, String ip) {
+    // Deliberately NOT @Transactional. Verifying with Play is a network round trip, and holding
+    // a pooled connection across it — then a row lock, once the account is locked — is how a slow
+    // dependency stalls the whole application. The write below owns its own short transaction.
+    public PurchaseOutcome purchaseCredits(String callerId, String purchaseToken, String productId, String ip) {
         if (purchaseToken == null || purchaseToken.length() > MAX_PURCHASE_TOKEN_LENGTH) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid purchase token.");
         }
@@ -288,34 +288,99 @@ public class CreditsService {
         if (creditsToAdd == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown product: " + productId);
         }
-        if (purchaseAuditLogRepository.existsByTokenHashAndStatus(PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "This purchase was already redeemed.");
+
+        // Cheap path first: an already-granted token needs no call to Play, because the audit row
+        // already records who the grant went to.
+        var alreadyGranted = purchaseAuditLogRepository.findFirstByTokenHashAndStatus(
+                PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED);
+        if (alreadyGranted.isPresent()) {
+            String owner = alreadyGranted.get().getUserId();
+            return new PurchaseOutcome(getBalance(callerId, ip), 0, true, owner.equals(callerId));
         }
 
         var result = playStoreVerifier.verifyInAppPurchase(productId, purchaseToken);
         if (!result.valid()) {
-            if (!purchaseAuditLogRepository.existsByTokenHashAndStatus(
-                    PurchaseTokens.hash(purchaseToken), PurchaseStatus.VERIFICATION_FAILED)) {
-                saveAudit(userId, purchaseToken, null, productId, PurchaseStatus.VERIFICATION_FAILED, null, ip);
-            }
+            ledgerWriter.recordVerificationFailure(callerId, purchaseToken, productId, ip);
             throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
                     "Google Play could not verify this purchase.");
         }
 
-        accountService.ensure(userId, ip);
-        CreditAccount account = lockAccount(userId);
-        applyDelta(account, creditsToAdd, CreditReason.PURCHASE, null,
-                PurchaseTokens.ledgerKey("purchase", purchaseToken), ip);
-        try {
-            saveAudit(userId, purchaseToken, result.orderId(), productId,
-                    PurchaseStatus.GRANTED, creditsToAdd, ip);
-        } catch (DataIntegrityViolationException dup) {
-            // Concurrent grant lost the race on uq(purchase_token, GRANTED) — roll back this one.
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "This purchase was already redeemed.");
+        // Falls back to the caller when Play reports no usable account id: an older client that
+        // attached none, or one that attached something that is not an id this service issues.
+        // The value is client-supplied, so it is checked rather than trusted — see
+        // PrincipalKey.isValidSubject. Crediting the caller is the safe fallback either way,
+        // because the caller is the one holding a verified token. reconcilePurchase cannot make
+        // the same allowance: it has no caller.
+        final String owner = ownerFromPlay(result.accountId()).orElse(callerId);
+
+        final int ownerBalance = ledgerWriter.grantPurchase(
+                owner, purchaseToken, productId, result.orderId(), creditsToAdd, ip);
+
+        // A guest that has paid must outlive the auth service's guest expiry, or its credits are
+        // orphaned when the account is purged. Non-blocking; see AuthInternalClient.retain.
+        authInternal.retain(owner);
+
+        log.info("Credits purchased: owner={} caller={} product={} +{} balance={}",
+                owner, callerId, productId, creditsToAdd, ownerBalance);
+        final boolean toCaller = owner.equals(callerId);
+        return new PurchaseOutcome(toCaller ? ownerBalance : getBalance(callerId, ip),
+                creditsToAdd, false, toCaller);
+    }
+
+    /**
+     * Moves a purchase's credits to the caller when the account that owns them is an abandoned
+     * guest.
+     *
+     * <p>For the case the rest of this class cannot fix on its own: a guest's session is gone —
+     * its refresh token rejected, or the account purged by the auth service's guest expiry — so
+     * the app is now a different principal, and the credits it paid for sit on an identity it can
+     * no longer authenticate as. Play still reports the purchase, which is the one durable link
+     * back to the original account.
+     *
+     * <p>Only an anonymous owner may be claimed. Holding a Play purchase token proves you are the
+     * Google account that bought it, which is fair grounds to reclaim an <em>anonymous</em>
+     * entitlement and no grounds at all to take over a real one: two people share a device, the
+     * second signs in, and nothing they can present should move the first person's credits. A
+     * full-account owner is therefore refused, and so is an owner whose type cannot be
+     * established — unknown is not permission.
+     *
+     * @return credits moved; 0 when there was nothing to move
+     */
+    // Not @Transactional: verifying with Play and asking auth what kind of account owns the
+    // purchase are both network calls, and the transfer below owns its own transaction.
+    public int claimPurchase(String callerId, String purchaseToken, String productId, String ip) {
+        if (purchaseToken == null || purchaseToken.length() > MAX_PURCHASE_TOKEN_LENGTH) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid purchase token.");
         }
-        log.info("Credits purchased: userId={} product={} +{} balance={}",
-                userId, productId, creditsToAdd, account.getBalance());
-        return account.getBalance();
+        var granted = purchaseAuditLogRepository.findFirstByTokenHashAndStatus(
+                PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED);
+        if (granted.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "No redeemed purchase matches this token.");
+        }
+        final String owner = granted.get().getUserId();
+        if (owner.equals(callerId)) return 0; // already yours
+
+        // The token has to be real and still valid, or anyone could claim against a made-up one.
+        var result = playStoreVerifier.verifyInAppPurchase(productId, purchaseToken);
+        if (!result.valid()) {
+            throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
+                    "Google Play could not verify this purchase.");
+        }
+
+        if (!authInternal.isGuest(owner).orElse(false)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "This purchase belongs to a registered account. Sign in to that account to use its credits.");
+        }
+
+        // Same mechanics as signing in: drain the guest, credit the target, once.
+        int moved = ledgerWriter.transferGuestBalance(owner, callerId, ip);
+        if (moved > 0) {
+            authInternal.retain(callerId);
+            log.info("Purchase claimed: {} credit(s) moved from abandoned guest {} to {}",
+                    moved, owner, callerId);
+        }
+        return moved;
     }
 
     /**
@@ -330,14 +395,18 @@ public class CreditsService {
      * this logs and does nothing rather than guessing an account to credit; the client's own
      * redemption still works.
      */
-    @Transactional
+    // Not @Transactional, for the same reason as purchaseCredits: this runs from the RTDN
+    // webhook, which Pub/Sub can deliver in bursts, and a Play call per delivery inside a
+    // transaction would hold one of ten pooled connections for each.
     public void reconcilePurchase(String purchaseToken, String productId) {
         if (purchaseToken == null || purchaseToken.isBlank()) return;
-        if (PRODUCT_CREDITS.get(productId) == null) {
+        final Integer credits = PRODUCT_CREDITS.get(productId);
+        if (credits == null) {
             log.warn("RTDN for unknown product '{}' — ignoring.", productId);
             return;
         }
-        if (purchaseAuditLogRepository.existsByTokenHashAndStatus(PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED)) {
+        if (purchaseAuditLogRepository.existsByTokenHashAndStatus(
+                PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED)) {
             return; // already credited, by the client or a previous delivery
         }
 
@@ -346,89 +415,94 @@ public class CreditsService {
             log.warn("RTDN purchase did not verify with Play — not crediting.");
             return;
         }
-        if (result.accountId() == null || result.accountId().isBlank()) {
-            log.warn("RTDN purchase has no obfuscated account id; leaving it for the client to redeem.");
+        // No caller to fall back on here, so an absent or malformed account id means this
+        // delivery cannot be attributed and is left for the client's own redemption.
+        var owner = ownerFromPlay(result.accountId());
+        if (owner.isEmpty()) {
+            log.warn("RTDN purchase has no usable obfuscated account id; leaving it for the client to redeem.");
             return;
         }
 
-        // Play purchases only ever originate in the mobile app, so the raw subject the client
-        // attached is namespaced with that issuer's alias to match how the account is keyed.
-        final String userId = PrincipalKey.of(playAccountAlias, result.accountId());
-        int credits = PRODUCT_CREDITS.get(productId);
-        accountService.ensure(userId, null);
-        CreditAccount account = lockAccount(userId);
-        applyDelta(account, credits, CreditReason.PURCHASE, null,
-                PurchaseTokens.ledgerKey("purchase", purchaseToken), null);
-        try {
-            saveAudit(userId, purchaseToken, result.orderId(), productId,
-                    PurchaseStatus.GRANTED, credits, null);
-        } catch (DataIntegrityViolationException dup) {
-            // The client redeemed it concurrently — that grant stands, so undo this one.
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "This purchase was already redeemed.");
-        }
+        final String userId = owner.get();
+        ledgerWriter.grantPurchase(userId, purchaseToken, productId, result.orderId(), credits, null);
+        authInternal.retain(userId);
+
         log.info("Reconciled unredeemed purchase from RTDN: userId={} product={} +{}",
                 userId, productId, credits);
     }
 
-    /** Claws back a refunded/voided purchase's credits (RTDN). Idempotent; balance may go negative. */
+    /**
+     * Claws back a refunded/voided purchase's credits. Idempotent; balance may go negative.
+     *
+     * <p>Driven by an RTDN in real time, and by the nightly sweep for anything that never arrived.
+     *
+     * @return true when this call actually revoked something, so a caller can report what it did
+     */
     @Transactional
-    public void revokeCreditsForToken(String purchaseToken) {
-        if (purchaseToken == null || purchaseToken.isBlank()) return;
+    public boolean revokeCreditsForToken(String purchaseToken) {
+        if (purchaseToken == null || purchaseToken.isBlank()) return false;
         if (purchaseAuditLogRepository.existsByTokenHashAndStatus(PurchaseTokens.hash(purchaseToken), PurchaseStatus.CREDITS_REVOKED)) {
-            return; // already handled (RTDN is at-least-once)
+            return false; // already handled (RTDN is at-least-once)
         }
         var grantedOpt = purchaseAuditLogRepository.findFirstByTokenHashAndStatus(
                 PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED);
-        if (grantedOpt.isEmpty()) return;
+        if (grantedOpt.isEmpty()) return false;
 
         var granted = grantedOpt.get();
         Integer amount = granted.getCreditsGranted();
         if (amount == null) amount = PRODUCT_CREDITS.get(granted.getProductId());
-        if (amount == null) return;
+        if (amount == null) return false;
 
         CreditAccount account = accountRepository.findForUpdate(granted.getUserId()).orElse(null);
-        if (account == null) return;
-        applyDelta(account, -amount, CreditReason.REVOKE, null,
+        if (account == null) return false;
+        ledgerWriter.applyDelta(account, -amount, CreditReason.REVOKE, null,
                 PurchaseTokens.ledgerKey("revoke", purchaseToken), null);
-        saveAudit(granted.getUserId(), purchaseToken, granted.getOrderId(), granted.getProductId(),
+        ledgerWriter.saveAudit(granted.getUserId(), purchaseToken, granted.getOrderId(), granted.getProductId(),
                 PurchaseStatus.CREDITS_REVOKED, null, null);
         log.info("Credits revoked (refund/void): userId={} product={} -{} balance={}",
                 granted.getUserId(), granted.getProductId(), amount, account.getBalance());
+        return true;
     }
 
     // ── internal helpers ──────────────────────────────────────────────────────────
 
-    private CreditAccount lockAccount(String userId) {
-        return accountRepository.findForUpdate(userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found."));
-    }
 
-    /** Applies a signed delta to the locked account and writes the matching ledger row. */
-    private void applyDelta(CreditAccount account, int delta, CreditReason reason,
-                            String toolId, String idempotencyKey, String ip) {
-        account.setBalance(account.getBalance() + delta);
-        accountRepository.save(account);
-        ledgerRepository.save(CreditLedger.builder()
-                .userId(account.getUserId())
-                .toolId(toolId)
-                .delta(delta)
-                .reason(reason)
-                .idempotencyKey(idempotencyKey)
-                .balanceAfter(account.getBalance())
-                .ip(ip)
-                .build());
-    }
-
-    private void saveAudit(String userId, String token, String orderId, String productId,
-                           PurchaseStatus status, Integer creditsGranted, String ip) {
-        purchaseAuditLogRepository.save(PurchaseAuditLog.builder()
-                .userId(userId).purchaseToken(token).orderId(orderId).productId(productId)
-                .status(status).creditsGranted(creditsGranted).ip(ip).build());
+    /**
+     * The account key for a Play-reported obfuscated external account id.
+     *
+     * <p>Play purchases only ever originate in the mobile app, so the subject is namespaced with
+     * that issuer's alias to match how accounts are keyed. The subject itself is attached by the
+     * client, which makes it the one identifier here that does not come from a verified token:
+     * anything outside the shape auth issues is refused, so a crafted value cannot become an
+     * account key, a path segment in a server-to-server call, or a log line of its own choosing.
+     *
+     * @return empty when Play reported no account id, or one this service would not issue
+     */
+    private java.util.Optional<String> ownerFromPlay(String playAccountId) {
+        if (playAccountId == null || playAccountId.isBlank()) return java.util.Optional.empty();
+        if (!PrincipalKey.isValidSubject(playAccountId)) {
+            log.warn("Play reported an obfuscated account id that is not a valid subject; ignoring it.");
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(PrincipalKey.of(playAccountAlias, playAccountId));
     }
 
     private java.time.Instant startOfTodayUtc() {
         return LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant();
     }
+
+    /**
+     * What a redemption did.
+     *
+     * @param callerBalance   the *caller's* balance after the call, which is what the client shows
+     * @param creditsGranted  credits added by this call; 0 when the token was already redeemed
+     * @param alreadyGranted  the token had been redeemed before, so this call changed nothing
+     * @param creditedToCaller whether the grant belongs to the caller. False means the purchase is
+     *        owned by another account and the caller's balance did not rise — the client must not
+     *        infer otherwise, which is the assumption that used to destroy purchases.
+     */
+    public record PurchaseOutcome(int callerBalance, int creditsGranted,
+                                  boolean alreadyGranted, boolean creditedToCaller) {}
 
     public record ChargeResult(int balanceRemaining, int charged, boolean alreadyCharged) {}
 

@@ -36,10 +36,17 @@ import org.apache.pdfbox.pdmodel.interactive.form.PDComboBox;
 import org.apache.pdfbox.pdmodel.interactive.form.PDListBox;
 import org.apache.pdfbox.pdmodel.interactive.form.PDRadioButton;
 import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
+import org.apache.pdfbox.pdmodel.interactive.form.PDChoice;
+import org.apache.pdfbox.pdmodel.interactive.form.PDPushButton;
+import org.apache.pdfbox.pdmodel.interactive.form.PDTerminalField;
+import org.apache.pdfbox.pdmodel.interactive.form.PDVariableText;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotation;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink;
 import org.apache.pdfbox.pdmodel.interactive.action.PDActionURI;
+import org.apache.pdfbox.pdmodel.interactive.action.PDActionResetForm;
+import org.apache.pdfbox.pdmodel.interactive.action.PDActionSubmitForm;
+import org.apache.pdfbox.pdmodel.common.filespecification.PDFileSpecification;
 import org.apache.pdfbox.cos.COSBase;
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.request.SanitizePdfRequest;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
@@ -53,6 +60,7 @@ import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSString;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.interactive.documentnavigation.destination.PDPageFitWidthDestination;
 import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDDocumentOutline;
@@ -2160,14 +2168,15 @@ public class PdfTools {
             PDAcroForm acro = new PDAcroForm(doc);
             doc.getDocumentCatalog().setAcroForm(acro);
 
-            PDFont font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
-            PDResources dr = new PDResources();
-            dr.put(COSName.getPDFName("Helv"), font);
-            acro.setDefaultResources(dr);
-            acro.setDefaultAppearance("/Helv 0 Tf 0 g");
-            acro.setNeedAppearances(true);
-
             if (specs == null) specs = new ArrayList<>();
+
+            // Helvetica is WinAnsi-only, and every character above U+00FF used to be dropped on
+            // its way to the page — so a Hindi author's captions vanished and the response was
+            // a 200. The Unicode face is only embedded when the document actually needs it, so
+            // an all-Latin form is unchanged.
+            FormFonts fonts = FormFonts.prepare(doc, acro, needsUnicodeFont(specs));
+            acro.setDefaultAppearance("/" + FormFonts.LATIN_RESOURCE + " 0 Tf 0 g");
+            acro.setNeedAppearances(true);
 
             // Radio options share one field, grouped by name; everything else is standalone.
             Map<String, List<FormFieldSpec>> radioGroups = new LinkedHashMap<>();
@@ -2184,9 +2193,25 @@ public class PdfTools {
             // total that depends on a subtotal has to come after it.
             List<PDField> calculationOrder = new ArrayList<>();
 
+            // Values the client asked for that the document would not take. Collected rather
+            // than swallowed: the request used to return 200 with the field silently empty.
+            List<String> rejectedValues = new ArrayList<>();
+
+            // Conditional visibility, keyed by the *parent* whose value drives it. Built before
+            // any field so a parent's validate action can carry its children's logic in the one
+            // action slot it has.
+            Map<String, String> showHideByParent = visibilityScripts(specs);
+
             int auto = 0;
             for (FormFieldSpec f : singles) {
                 String type = f.getType() == null ? "text" : f.getType().toLowerCase();
+                // An unrecognised type used to fall through to the text branch, so a typo'd
+                // "combobox" shipped as a text box while the editor showed a dropdown.
+                if (!FormFieldSpec.TYPES.contains(type)) {
+                    throw ApiException.badRequest("Unknown field type '" + f.getType()
+                            + "'. Accepted types: "
+                            + String.join(", ", new TreeSet<>(FormFieldSpec.TYPES)) + ".");
+                }
                 String name = safeName(f.getName(), type + "_" + (auto++));
                 PDPage page = doc.getPage(clampPage(f.getPage(), doc));
                 PDRectangle rect = toRect(f, page);
@@ -2196,7 +2221,7 @@ public class PdfTools {
                         PDCheckBox cb = new PDCheckBox(acro);
                         cb.setPartialName(name);
                         acro.getFields().add(cb);
-                        placeWidget(cb, page, rect);
+                        placeWidget(cb, page, rect, f);
                         applyCommonTraits(cb, f);
                         boolean on = Boolean.TRUE.equals(f.getChecked()) || isTruthy(f.getValue());
                         // The on-state was hardcoded "Yes", so a checkbox could never export
@@ -2214,19 +2239,34 @@ public class PdfTools {
                         PDComboBox combo = new PDComboBox(acro);
                         combo.setPartialName(name);
                         acro.getFields().add(combo);
-                        if (f.getOptions() != null && !f.getOptions().isEmpty()) combo.setOptions(f.getOptions());
-                        placeWidget(combo, page, rect);
+                        setChoiceOptions(combo, f);
+                        // The Edit flag: a combo the filler may type into instead of being held
+                        // to the listed options.
+                        if (Boolean.TRUE.equals(f.getEditable())) combo.setEdit(true);
+                        if (Boolean.TRUE.equals(f.getSortOptions())) combo.setSort(true);
+                        if (Boolean.TRUE.equals(f.getDoNotSpellCheck())) combo.setDoNotSpellCheck(true);
+                        placeWidget(combo, page, rect, f);
+                        applyVariableTextTraits(combo, f, fonts);
                         applyCommonTraits(combo, f);
-                        if (f.getValue() != null && !f.getValue().isBlank()) {
-                            try { combo.setValue(f.getValue()); } catch (Exception ignore) {}
-                        }
+                        setChoiceValue(combo, f, name, rejectedValues);
+                        applyFieldActions(doc, combo, f, showHideByParent.get(name));
+                        if (f.getCalculation() != null) calculationOrder.add(combo);
+                        break;
+                    }
+                    case "pushbutton": {
+                        PDPushButton button = new PDPushButton(acro);
+                        button.setPartialName(name);
+                        acro.getFields().add(button);
+                        placeWidget(button, page, rect, f);
+                        applyCommonTraits(button, f);
+                        applyButtonAction(doc, button, f);
                         break;
                     }
                     case "signature": {
                         PDSignatureField sig = new PDSignatureField(acro);
                         sig.setPartialName(name);
                         acro.getFields().add(sig);
-                        placeWidget(sig, page, rect);
+                        placeWidget(sig, page, rect, f);
                         applyCommonTraits(sig, f);
                         break;
                     }
@@ -2234,13 +2274,16 @@ public class PdfTools {
                         PDListBox list = new PDListBox(acro);
                         list.setPartialName(name);
                         acro.getFields().add(list);
-                        if (f.getOptions() != null && !f.getOptions().isEmpty()) list.setOptions(f.getOptions());
+                        setChoiceOptions(list, f);
                         list.setMultiSelect(Boolean.TRUE.equals(f.getMultiSelect()));
-                        placeWidget(list, page, rect);
+                        if (Boolean.TRUE.equals(f.getSortOptions())) list.setSort(true);
+                        if (Boolean.TRUE.equals(f.getDoNotSpellCheck())) list.setDoNotSpellCheck(true);
+                        placeWidget(list, page, rect, f);
+                        applyVariableTextTraits(list, f, fonts);
                         applyCommonTraits(list, f);
-                        if (f.getValue() != null && !f.getValue().isBlank()) {
-                            try { list.setValue(f.getValue()); } catch (Exception ignore) {}
-                        }
+                        setChoiceValue(list, f, name, rejectedValues);
+                        applyFieldActions(doc, list, f, showHideByParent.get(name));
+                        if (f.getCalculation() != null) calculationOrder.add(list);
                         break;
                     }
                     default: { // text, multiline, date, number, email, phone
@@ -2248,15 +2291,25 @@ public class PdfTools {
                         tf.setPartialName(name);
                         acro.getFields().add(tf);
                         if ("multiline".equals(type)) tf.setMultiline(true);
-                        float fs = f.getFontSize() == null ? 0f : f.getFontSize();
-                        tf.setDefaultAppearance("/Helv " + fs + " Tf 0 g");
+                        if (Boolean.TRUE.equals(f.getPassword())) tf.setPassword(true);
+                        if (Boolean.TRUE.equals(f.getDoNotSpellCheck())) tf.setDoNotSpellCheck(true);
+                        if (Boolean.TRUE.equals(f.getDoNotScroll())) tf.setDoNotScroll(true);
+                        applyVariableTextTraits(tf, f, fonts);
                         applyTextTraits(tf, f, "multiline".equals(type));
-                        placeWidget(tf, page, rect);
-                        if (Boolean.TRUE.equals(f.getRequired())) tf.setRequired(true);
+                        placeWidget(tf, page, rect, f);
+                        applyCommonTraits(tf, f);
                         if (f.getValue() != null && !f.getValue().isBlank()) {
-                            try { tf.setValue(f.getValue()); } catch (Exception ignore) {}
+                            try {
+                                tf.setValue(f.getValue());
+                                // /DV as well as /V, so "Reset form" in a reader restores the
+                                // default the author set instead of blanking the field.
+                                tf.setDefaultValue(f.getValue());
+                            } catch (Exception incompatible) {
+                                rejectedValues.add(name);
+                            }
                         }
-                        applyFieldActions(doc, tf, f);
+                        applyFieldActions(doc, tf, f, showHideByParent.get(name));
+                        if (f.getCalculation() != null) calculationOrder.add(tf);
                     }
                 }
                 drawFieldLabel(doc, f, page, rect);
@@ -2269,12 +2322,15 @@ public class PdfTools {
 
                 List<PDAnnotationWidget> widgets = new ArrayList<>();
                 List<String> exports = new ArrayList<>();
+                // On-states have to be distinct within the group: two kids sharing one means
+                // selecting either selects both.
+                Set<String> takenStates = new LinkedHashSet<>();
                 String selected = "Off";
                 int idx = 0;
                 for (FormFieldSpec f : e.getValue()) {
                     PDPage page = doc.getPage(clampPage(f.getPage(), doc));
-                    // Export value doubles as the widget's on-state name (COSName-safe).
-                    String onState = safeName(f.getExportValue(), "opt" + idx).replaceAll("[^A-Za-z0-9_]", "_");
+                    String onState = uniqueOnState(
+                            safeName(f.getExportValue(), "opt" + idx), "opt" + idx, takenStates);
                     boolean on = Boolean.TRUE.equals(f.getChecked());
                     if (on) selected = onState;
 
@@ -2295,9 +2351,26 @@ public class PdfTools {
                 // Traits come from the first option — they describe the question, not the
                 // individual circle, and were never applied to a radio group at all.
                 applyCommonTraits(radio, e.getValue().get(0));
+                if (Boolean.TRUE.equals(e.getValue().get(0).getRadiosInUnison())) {
+                    radio.setRadiosInUnison(true);
+                }
                 radio.setWidgets(widgets);
-                try { radio.setExportValues(exports); } catch (Exception ignore) {}
+                radio.setExportValues(exports);
                 radio.getCOSObject().setName(COSName.V, selected);
+                // /DV too, so a reader's "Reset form" returns to the author's choice.
+                radio.getCOSObject().setName(COSName.getPDFName("DV"), selected);
+            }
+
+            // /CO. A reader evaluates calculations in this order, so a total that depends on a
+            // subtotal has to come after it. The list was declared and never populated, so the
+            // key was absent and the order was whatever the reader picked.
+            if (!calculationOrder.isEmpty()) acro.setCalcOrder(calculationOrder);
+
+            addInitialVisibilityScript(doc, specs);
+
+            if (!rejectedValues.isEmpty()) {
+                throw ApiException.badRequest("These fields would not accept the default value given: "
+                        + String.join(", ", rejectedValues) + ".");
             }
 
             // Text and choice fields can be auto-generated; buttons we built above.
@@ -2322,6 +2395,7 @@ public class PdfTools {
         }
         if (Boolean.TRUE.equals(f.getReadOnly())) field.setReadOnly(true);
         if (Boolean.TRUE.equals(f.getRequired())) field.setRequired(true);
+        if (Boolean.TRUE.equals(f.getNoExport())) field.setNoExport(true);
     }
 
     /**
@@ -2331,17 +2405,10 @@ public class PdfTools {
      * <p>Comb is only set when the spec actually permits it — with a MaxLen and not on a
      * multiline field — because a comb flag without a length makes readers draw nothing.
      */
-    private static void applyTextTraits(PDTextField tf, FormFieldSpec f, boolean multiline) throws IOException {
-        if (f.getTooltip() != null && !f.getTooltip().isBlank()) {
-            tf.getCOSObject().setString(COSName.TU, f.getTooltip());
-        }
-        if (Boolean.TRUE.equals(f.getReadOnly())) tf.setReadOnly(true);
+    private static void applyTextTraits(PDTextField tf, FormFieldSpec f, boolean multiline) {
         if (f.getMaxLength() != null && f.getMaxLength() > 0) {
             tf.setMaxLen(f.getMaxLength());
             if (Boolean.TRUE.equals(f.getComb()) && !multiline) tf.setComb(true);
-        }
-        if (f.getAlignment() != null && f.getAlignment() >= 0 && f.getAlignment() <= 2) {
-            tf.setQ(f.getAlignment());
         }
     }
 
@@ -2354,7 +2421,8 @@ public class PdfTools {
      * thing enforcing them — this simply means a form opened on a laptop behaves the way its
      * author designed it.
      */
-    private static void applyFieldActions(PDDocument doc, PDTextField tf, FormFieldSpec f) {
+    private static void applyFieldActions(PDDocument doc, PDTerminalField field, FormFieldSpec f,
+                                          String showHideChildren) {
         String format = f.getFormat() == null ? "" : f.getFormat();
         String keystroke = null, formatScript = null;
         if ("date".equals(format) || (f.getDateFormat() != null && !f.getDateFormat().isBlank())) {
@@ -2364,6 +2432,16 @@ public class PdfTools {
                     ? "dd/mm/yyyy" : f.getDateFormat();
             keystroke = "AFDate_KeystrokeEx(\"" + mask + "\");";
             formatScript = "AFDate_FormatEx(\"" + mask + "\");";
+        } else if ("email".equals(format)) {
+            // The DTO carried format=email and only date and number were ever handled, so an
+            // email field produced a plain text box while the inspector displayed a badge
+            // saying it validated.
+            keystroke = "AFSpecial_KeystrokeEx(\"\");";
+            formatScript = null;
+        } else if ("phone".equals(format)) {
+            // AFSpecial_Keystroke(0) is the reader's built-in phone mask.
+            keystroke = "AFSpecial_Keystroke(0);";
+            formatScript = "AFSpecial_Format(0);";
         } else if ("number".equals(format)) {
             // nDec, sepStyle, negStyle, currStyle, strCurrency, bCurrencyPrepend.
             //
@@ -2381,6 +2459,17 @@ public class PdfTools {
         // offered in the editor, stored in the draft and enforced by the in-app runtime, but
         // never reached the PDF, so a form filled in any other reader ignored them entirely.
         StringBuilder validateBuilder = new StringBuilder();
+        if ("email".equals(format)) {
+            validateBuilder.append("if (event.value && !/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(event.value)) {")
+                    .append(" app.alert(\"That is not a valid email address.\"); event.rc = false; }");
+        }
+        if (f.getMinLength() != null && f.getMinLength() > 0) {
+            // Enforced by the in-app runtime all along, but never put on the wire, so a form
+            // filled in any other reader ignored it.
+            validateBuilder.append("if (event.value && event.value.length < ").append(f.getMinLength())
+                    .append(") { app.alert(\"Enter at least ").append(f.getMinLength())
+                    .append(" characters.\"); event.rc = false; }");
+        }
         if (f.getValidationPattern() != null && !f.getValidationPattern().isBlank()) {
             String pattern = f.getValidationPattern().replace("\\", "\\\\").replace("\"", "\\\"");
             validateBuilder.append("if (event.value && !(new RegExp(\"").append(pattern)
@@ -2400,6 +2489,11 @@ public class PdfTools {
                         .append(".\"); event.rc = false; }");
             }
             validateBuilder.append(" }");
+        }
+        // Children that appear or disappear with this field's value. One action slot, so it
+        // shares the validate script rather than needing one of its own.
+        if (showHideChildren != null && !showHideChildren.isBlank()) {
+            validateBuilder.append(showHideChildren);
         }
         String validate = validateBuilder.length() == 0 ? null : validateBuilder.toString();
 
@@ -2422,11 +2516,208 @@ public class PdfTools {
         if (formatScript != null) actions.setF(javascript(doc, formatScript));
         if (validate != null) actions.setV(javascript(doc, validate));
         if (calculate != null) actions.setC(javascript(doc, calculate));
-        tf.setActions(actions);
+        field.setActions(actions);
+    }
+
+    /**
+     * Font size and justification, which live in /DA and /Q on any variable-text field.
+     *
+     * <p>Both were applied only in the text branch. A dropdown or list box is a
+     * {@link PDVariableText} too, so the API accepted a font size and an alignment for one and
+     * dropped them — six controls the editor hid for choice fields purely because of that.
+     */
+    private static void applyVariableTextTraits(PDVariableText field, FormFieldSpec f, FormFonts fonts) {
+        float size = f.getFontSize() == null ? 0f : f.getFontSize();
+        String resource = fonts.resourceFor(fieldText(f));
+        field.setDefaultAppearance("/" + resource + " " + size + " Tf " + textColourOperator(f));
+        if (f.getAlignment() != null && f.getAlignment() >= 0 && f.getAlignment() <= 2) {
+            field.setQ(f.getAlignment());
+        }
+    }
+
+    /**
+     * Options for a choice field, with their export values when the client sent them.
+     *
+     * <p>Only the display list was ever set, so the exported value was forced to be the text
+     * shown — "United Kingdom" rather than "GB".
+     */
+    private static void setChoiceOptions(PDChoice field, FormFieldSpec f) {
+        List<String> display = f.getOptions();
+        if (display == null || display.isEmpty()) return;
+        List<String> exports = f.getOptionValues();
+        if (exports != null && exports.size() == display.size()) {
+            field.setOptions(exports, display);
+        } else {
+            field.setOptions(display);
+        }
+    }
+
+    /**
+     * The default selection for a choice field, written to /V and /DV.
+     *
+     * <p>A value outside the options used to disappear inside {@code catch (Exception ignore)},
+     * so the form opened with nothing selected and a 200 said everything was fine.
+     */
+    private static void setChoiceValue(PDChoice field, FormFieldSpec f, String name, List<String> rejected) {
+        if (f.getValue() == null || f.getValue().isBlank()) return;
+        try {
+            field.setValue(f.getValue());
+            field.setDefaultValue(f.getValue());
+        } catch (Exception incompatible) {
+            rejected.add(name);
+        }
+    }
+
+    /**
+     * A COSName-safe on-state that no sibling in the group already holds.
+     *
+     * <p>The sanitiser maps everything outside [A-Za-z0-9_] to '_', so "A/B" and "A-B" both
+     * became "A_B" — and a Hindi group's localized export values all collapsed to "___", which
+     * made selecting one option select the whole group.
+     */
+    private static String uniqueOnState(String requested, String fallback, Set<String> taken) {
+        String base = requested.replaceAll("[^A-Za-z0-9_]", "_");
+        if (base.isBlank() || base.chars().allMatch(c -> c == '_')) base = fallback;
+        String candidate = base;
+        int n = 2;
+        while (!taken.add(candidate)) {
+            candidate = base + "_" + (n++);
+        }
+        return candidate;
     }
 
     private static PDActionJavaScript javascript(PDDocument doc, String source) {
         return new PDActionJavaScript(source);
+    }
+
+    /**
+     * Show/hide scripts for conditional fields, grouped by the parent that drives them.
+     *
+     * <p>{@code FormFieldSpec.condition} was sent by the editor and read nowhere: conditional
+     * visibility worked inside the app and was simply absent from the produced PDF, so a form
+     * opened in any reader showed every field at once.
+     */
+    private static Map<String, String> visibilityScripts(List<FormFieldSpec> specs) {
+        Map<String, StringBuilder> byParent = new LinkedHashMap<>();
+        for (FormFieldSpec child : specs) {
+            FormFieldSpec.Condition c = child.getCondition();
+            if (c == null || c.getParentField() == null || c.getParentField().isBlank()) continue;
+            if (child.getName() == null || child.getName().isBlank()) continue;
+            byParent.computeIfAbsent(c.getParentField().trim(), k -> new StringBuilder())
+                    .append(" try { var t = this.getField(\"")
+                    .append(jsString(child.getName().trim()))
+                    .append("\"); if (t) t.display = (")
+                    .append(conditionPredicate("event.value", c))
+                    .append(") ? display.visible : display.hidden; } catch (e) {}");
+        }
+        Map<String, String> scripts = new LinkedHashMap<>();
+        byParent.forEach((parent, script) -> scripts.put(parent, script.toString()));
+        return scripts;
+    }
+
+    /**
+     * A document-level script that applies every condition once when the file is opened.
+     *
+     * <p>Without it a conditional field would stay visible until its parent was touched, which
+     * is the opposite of what the author asked for.
+     */
+    private static void addInitialVisibilityScript(PDDocument doc, List<FormFieldSpec> specs) {
+        StringBuilder script = new StringBuilder();
+        for (FormFieldSpec child : specs) {
+            FormFieldSpec.Condition c = child.getCondition();
+            if (c == null || c.getParentField() == null || c.getParentField().isBlank()) continue;
+            if (child.getName() == null || child.getName().isBlank()) continue;
+            script.append("try { var p = this.getField(\"").append(jsString(c.getParentField().trim()))
+                    .append("\"); var t = this.getField(\"").append(jsString(child.getName().trim()))
+                    .append("\"); if (p && t) { var v = p.value; t.display = (")
+                    .append(conditionPredicate("v", c))
+                    .append(") ? display.visible : display.hidden; } } catch (e) {}\n");
+        }
+        if (script.length() == 0) return;
+        PDDocumentNameDictionary names = doc.getDocumentCatalog().getNames();
+        if (names == null) names = new PDDocumentNameDictionary(doc.getDocumentCatalog());
+        PDJavascriptNameTreeNode tree = names.getJavaScript();
+        if (tree == null) tree = new PDJavascriptNameTreeNode();
+        Map<String, PDActionJavaScript> entries = new LinkedHashMap<>();
+        try {
+            Map<String, PDActionJavaScript> existing = tree.getNames();
+            if (existing != null) entries.putAll(existing);
+        } catch (IOException ignore) {
+            // No existing tree to merge; ours becomes the only entry.
+        }
+        entries.put("pdfStudioFormVisibility", new PDActionJavaScript(script.toString()));
+        tree.setNames(entries);
+        names.setJavascript(tree);
+        doc.getDocumentCatalog().setNames(names);
+    }
+
+    /** A JavaScript boolean testing [valueExpression] against the condition. */
+    private static String conditionPredicate(String valueExpression, FormFieldSpec.Condition c) {
+        String operator = c.getOperator() == null ? "equals" : c.getOperator();
+        String literal = '"' + jsString(c.getValue() == null ? "" : c.getValue()) + '"';
+        return switch (operator) {
+            case "notEquals" -> "String(" + valueExpression + ") != " + literal;
+            case "contains" -> "String(" + valueExpression + ").indexOf(" + literal + ") >= 0";
+            case "isEmpty" -> "String(" + valueExpression + ") == \"\"";
+            case "isNotEmpty" -> "String(" + valueExpression + ") != \"\"";
+            case "greaterThan" -> "parseFloat(" + valueExpression + ") > parseFloat(" + literal + ")";
+            case "lessThan" -> "parseFloat(" + valueExpression + ") < parseFloat(" + literal + ")";
+            default -> "String(" + valueExpression + ") == " + literal;
+        };
+    }
+
+    /** Escapes a value for embedding in a double-quoted JavaScript string. */
+    private static String jsString(String raw) {
+        return raw.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", " ").replace("\r", " ");
+    }
+
+    /**
+     * What a push button does when clicked, and what it says on its face.
+     *
+     * <p>{@link PDAnnotationWidget#setAction} was called nowhere in this file, so submit, reset,
+     * print and open-a-link buttons could not be produced at all.
+     */
+    private static void applyButtonAction(PDDocument doc, PDPushButton button, FormFieldSpec f)
+            throws IOException {
+        PDAnnotationWidget w = button.getWidgets().get(0);
+        String caption = f.getCaption() == null || f.getCaption().isBlank()
+                ? f.getLabel() : f.getCaption();
+        if (caption != null && !caption.isBlank()) {
+            PDAppearanceCharacteristicsDictionary mk = w.getAppearanceCharacteristics();
+            if (mk == null) {
+                mk = new PDAppearanceCharacteristicsDictionary(new COSDictionary());
+                w.setAppearanceCharacteristics(mk);
+            }
+            mk.setNormalCaption(toWinAnsi(caption));
+        }
+        String action = f.getAction() == null ? "" : f.getAction().toLowerCase();
+        String target = f.getActionTarget();
+        switch (action) {
+            case "submit" -> {
+                if (target == null || target.isBlank()) {
+                    throw ApiException.badRequest(
+                            "A submit button needs an action_target (the URL to submit to).");
+                }
+                PDActionSubmitForm submit = new PDActionSubmitForm();
+                PDFileSpecification spec = PDFileSpecification.createFS(new COSString(target));
+                submit.setFile(spec);
+                w.setAction(submit);
+            }
+            case "reset" -> w.setAction(new PDActionResetForm());
+            case "print" -> w.setAction(javascript(doc, "this.print();"));
+            case "uri" -> {
+                if (target == null || target.isBlank()) {
+                    throw ApiException.badRequest(
+                            "A link button needs an action_target (the URL to open).");
+                }
+                PDActionURI uri = new PDActionURI();
+                uri.setURI(target);
+                w.setAction(uri);
+            }
+            default -> throw ApiException.badRequest("Unknown button action '" + f.getAction()
+                    + "'. Accepted actions: print, reset, submit, uri.");
+        }
     }
 
     /**
@@ -2589,6 +2880,33 @@ public class PdfTools {
         }
     }
 
+    /**
+     * Whether anything in the request needs more than WinAnsi.
+     *
+     * <p>Values, options and tooltips as well as captions: a default value the font cannot
+     * encode fails on {@code setValue}, which used to disappear into a swallowed exception.
+     */
+    private static boolean needsUnicodeFont(List<FormFieldSpec> specs) {
+        List<String> texts = new ArrayList<>();
+        for (FormFieldSpec f : specs) {
+            texts.add(f.getLabel());
+            texts.add(f.getValue());
+            texts.add(f.getTooltip());
+            texts.add(f.getCaption());
+            if (f.getOptions() != null) texts.addAll(f.getOptions());
+            if (f.getOptionValues() != null) texts.addAll(f.getOptionValues());
+        }
+        return FormFonts.anyNeedsUnicode(texts);
+    }
+
+    /** Every piece of text a field has to be able to render, for picking its /DA font. */
+    private static String fieldText(FormFieldSpec f) {
+        StringBuilder all = new StringBuilder();
+        if (f.getValue() != null) all.append(f.getValue());
+        if (f.getOptions() != null) f.getOptions().forEach(all::append);
+        return all.toString();
+    }
+
     private static String safeName(String v, String fallback) {
         return (v == null || v.isBlank()) ? fallback : v.trim();
     }
@@ -2626,10 +2944,17 @@ public class PdfTools {
 
         float size = (f.getLabelSize() == null || f.getLabelSize() <= 0)
                 ? LABEL_DEFAULT_SIZE : f.getLabelSize();
-        PDFont font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
-        // Standard14 fonts are WinAnsi; anything outside it would throw mid-write and lose the
-        // whole document, so unsupported characters are dropped rather than taking the page down.
-        String text = toWinAnsi(label);
+        // Helvetica cannot encode anything above U+00FF, so a Devanagari caption used to be
+        // written as nothing at all. Hind is subset here because a caption is fixed text.
+        PDFont font;
+        String text;
+        if (FormFonts.isLatin1(label)) {
+            font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
+            text = toWinAnsi(label);
+        } else {
+            font = FormFonts.loadForPageText(doc);
+            text = label;
+        }
         if (text.isBlank()) return;
 
         // Where the caption goes is the author's choice; "right" is the default because that is
@@ -2694,18 +3019,47 @@ public class PdfTools {
 
     // Positions a single-widget terminal field's widget on a page.
     private static void placeWidget(PDField field, PDPage page, PDRectangle rect) throws IOException {
+        placeWidget(field, page, rect, null);
+    }
+
+    private static void placeWidget(PDField field, PDPage page, PDRectangle rect, FormFieldSpec f)
+            throws IOException {
         PDAnnotationWidget w = field.getWidgets().get(0);
         w.setRectangle(rect);
         w.setPage(page);
-        w.setPrinted(true);
+        applyWidgetVisibility(w, f);
         // An empty text field carried no border or background, so in any reader that does not
         // synthesise one it was completely invisible — the person filling the form could not
         // see where to type. Toggles draw their own box in buildToggleAppearance; everything
         // else gets a light outline and tint here.
-        if (!(field instanceof PDCheckBox) && !(field instanceof PDRadioButton)) {
-            styleDataEntryWidget(w);
+        if (!(field instanceof PDCheckBox) && !(field instanceof PDRadioButton)
+                && !(field instanceof PDPushButton)) {
+            styleDataEntryWidget(w, f);
         }
         page.getAnnotations().add(w);
+    }
+
+    /**
+     * Whether a widget shows and prints.
+     *
+     * <p>{@code setPrinted(true)} was unconditional, so a screen-only field — an instruction
+     * box, a field only there to drive a calculation — could not be expressed at all.
+     */
+    private static void applyWidgetVisibility(PDAnnotationWidget w, FormFieldSpec f) {
+        if (f != null && Boolean.TRUE.equals(f.getHidden())) {
+            w.setHidden(true);
+            w.setPrinted(false);
+            return;
+        }
+        w.setPrinted(f == null || !Boolean.TRUE.equals(f.getNoPrint()));
+        if (f != null && f.getRotation() != null && f.getRotation() % 90 == 0) {
+            PDAppearanceCharacteristicsDictionary mk = w.getAppearanceCharacteristics();
+            if (mk == null) {
+                mk = new PDAppearanceCharacteristicsDictionary(new COSDictionary());
+                w.setAppearanceCharacteristics(mk);
+            }
+            mk.setRotation(f.getRotation());
+        }
     }
 
     /**
@@ -2746,20 +3100,77 @@ public class PdfTools {
         }
     }
 
-    /** Gives a data-entry widget a visible outline and a faint fill. */
-    private static void styleDataEntryWidget(PDAnnotationWidget w) {
+    /**
+     * Gives a data-entry widget its outline and fill.
+     *
+     * <p>The defaults — a mid grey outline on a very light grey fill — are visible on white
+     * paper without competing with the document's own content once printed. They used to be the
+     * only option; the author can now set either, and {@code background_color: "none"} leaves
+     * the box transparent for a form printed over existing ruled lines.
+     */
+    private static void styleDataEntryWidget(PDAnnotationWidget w, FormFieldSpec f) {
+        float width = f == null || f.getBorderWidth() == null ? 1f : Math.max(0f, f.getBorderWidth());
         PDBorderStyleDictionary border = new PDBorderStyleDictionary();
-        border.setWidth(1);
-        border.setStyle(PDBorderStyleDictionary.STYLE_SOLID);
+        border.setWidth(width);
+        border.setStyle(borderStyleName(f == null ? null : f.getBorderStyle()));
         w.setBorderStyle(border);
 
-        PDAppearanceCharacteristicsDictionary mk =
-                new PDAppearanceCharacteristicsDictionary(new COSDictionary());
-        // Mid grey outline, very light grey fill: visible on white paper without competing
-        // with the document's own content once printed.
-        mk.setBorderColour(new PDColor(new float[]{0.45f, 0.45f, 0.45f}, PDDeviceRGB.INSTANCE));
-        mk.setBackground(new PDColor(new float[]{0.96f, 0.96f, 0.96f}, PDDeviceRGB.INSTANCE));
-        w.setAppearanceCharacteristics(mk);
+        PDAppearanceCharacteristicsDictionary mk = w.getAppearanceCharacteristics();
+        if (mk == null) {
+            mk = new PDAppearanceCharacteristicsDictionary(new COSDictionary());
+            w.setAppearanceCharacteristics(mk);
+        }
+        if (width > 0) {
+            mk.setBorderColour(rgb(f == null ? null : f.getBorderColor(), 0.45f));
+        }
+        String background = f == null ? null : f.getBackgroundColor();
+        if (!"none".equalsIgnoreCase(String.valueOf(background))) {
+            mk.setBackground(rgb(background, 0.96f));
+        }
+    }
+
+    private static String borderStyleName(String style) {
+        if (style == null) return PDBorderStyleDictionary.STYLE_SOLID;
+        return switch (style.toLowerCase()) {
+            case "dashed" -> PDBorderStyleDictionary.STYLE_DASHED;
+            case "beveled" -> PDBorderStyleDictionary.STYLE_BEVELED;
+            case "inset" -> PDBorderStyleDictionary.STYLE_INSET;
+            case "underline" -> PDBorderStyleDictionary.STYLE_UNDERLINE;
+            default -> PDBorderStyleDictionary.STYLE_SOLID;
+        };
+    }
+
+    /** #RRGGBB to a device-RGB colour, or a grey of [fallback] when it is missing or malformed. */
+    private static PDColor rgb(String hex, float fallback) {
+        float[] grey = {fallback, fallback, fallback};
+        if (hex == null) return new PDColor(grey, PDDeviceRGB.INSTANCE);
+        String value = hex.trim().replace("#", "");
+        if (value.length() != 6) return new PDColor(grey, PDDeviceRGB.INSTANCE);
+        try {
+            return new PDColor(new float[]{
+                    Integer.parseInt(value.substring(0, 2), 16) / 255f,
+                    Integer.parseInt(value.substring(2, 4), 16) / 255f,
+                    Integer.parseInt(value.substring(4, 6), 16) / 255f,
+            }, PDDeviceRGB.INSTANCE);
+        } catch (NumberFormatException malformed) {
+            return new PDColor(grey, PDDeviceRGB.INSTANCE);
+        }
+    }
+
+    /** The text colour operator for a /DA string. Black unless the author chose otherwise. */
+    private static String textColourOperator(FormFieldSpec f) {
+        String hex = f == null ? null : f.getTextColor();
+        if (hex == null) return "0 g";
+        String value = hex.trim().replace("#", "");
+        if (value.length() != 6) return "0 g";
+        try {
+            float r = Integer.parseInt(value.substring(0, 2), 16) / 255f;
+            float g = Integer.parseInt(value.substring(2, 4), 16) / 255f;
+            float b = Integer.parseInt(value.substring(4, 6), 16) / 255f;
+            return r + " " + g + " " + b + " rg";
+        } catch (NumberFormatException malformed) {
+            return "0 g";
+        }
     }
 
     /**

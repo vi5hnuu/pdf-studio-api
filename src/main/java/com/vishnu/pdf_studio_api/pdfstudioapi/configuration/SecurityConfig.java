@@ -51,6 +51,9 @@ public class SecurityConfig {
     private static final String[] PUBLIC_PATHS = {
             "/api-docs/**", "/swagger-ui/**", "/swagger-ui.html",
             "/actuator/health",
+            // Read before the app has a token, and on purpose: if an auth change is why a build
+            // has to be forced out, needing auth to find that out is circular.
+            "/api/v1/app-config",
     };
 
     /** Path of the machine-to-machine Play RTDN webhook. */

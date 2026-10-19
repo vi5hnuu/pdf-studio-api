@@ -93,10 +93,36 @@ public class CreditsController {
                                                         HttpServletRequest request) {
         String token = body.get("purchaseToken");
         String productId = body.get("productId");
-        int balance = creditsService.purchaseCredits(
+        var outcome = creditsService.purchaseCredits(
                 CurrentUser.requireId(), token, productId, ClientIp.of(request));
-        return ResponseEntity.ok(Map.of("success", true, "message", "Credits added.",
-                "data", Map.of("credits", balance)));
+        // "credits" stays the caller's balance, which is what every client reads, so an older
+        // build keeps working. The two flags are what let a newer one tell an idempotent replay
+        // from a purchase that belongs to a different account — a distinction it previously had
+        // to guess at from a 409, and guessed wrong.
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "message", outcome.creditedToCaller() ? "Credits added." : "This purchase belongs to another account.",
+                "data", Map.of(
+                        "credits", outcome.callerBalance(),
+                        "creditsGranted", outcome.creditsGranted(),
+                        "alreadyGranted", outcome.alreadyGranted(),
+                        "creditedToCaller", outcome.creditedToCaller())));
+    }
+
+    /**
+     * Recovers a purchase whose owning session the caller has lost.
+     *
+     * <p>Only ever moves credits from an abandoned <em>guest</em>; see
+     * {@link CreditsService#claimPurchase}.
+     */
+    @PostMapping("/claim-purchase")
+    public ResponseEntity<Map<String, Object>> claimPurchase(@RequestBody Map<String, String> body,
+                                                             HttpServletRequest request) {
+        int moved = creditsService.claimPurchase(CurrentUser.requireId(),
+                body.get("purchaseToken"), body.get("productId"), ClientIp.of(request));
+        return ResponseEntity.ok(Map.of("success", true,
+                "message", moved > 0 ? "Credits restored." : "Nothing to restore.",
+                "data", Map.of("creditsMoved", moved)));
     }
 
     /**

@@ -63,4 +63,9 @@ public class ApiException extends RuntimeException {
     public static ApiException tooLarge(String message) {
         return new ApiException(HttpStatus.PAYLOAD_TOO_LARGE, "FILE_TOO_LARGE", message);
     }
+
+    /** The request is fine; this build cannot carry it out. */
+    public static ApiException serverError(String message) {
+        return new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "SERVER_ERROR", message);
+    }
 }

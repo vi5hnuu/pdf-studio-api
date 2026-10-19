@@ -101,4 +101,46 @@ class IpGrantGuardTest {
         assertNotEquals(appOpening - 1, creditsService.getBalance(webUser, uniqueIp()),
                 "the same subject from a different issuer must not share the balance");
     }
+
+    @Test
+    @DisplayName("simultaneous first requests from one IP neither deadlock nor exceed the cap")
+    void concurrentFirstRequestsAreSafe() throws Exception {
+        // This is the case that broke in production. The counter used to SELECT ... FOR UPDATE a
+        // row that did not exist yet, which takes a shared gap lock, so two requests from one IP
+        // each held one and each then blocked on the other's insert: deadlock, surfacing as a 500
+        // on the balance endpoint. Nothing covered concurrency here, so nothing caught it.
+        final String ip = uniqueIp();
+        final int cap = creditProperties.getWelcomeGrantsPerIpPerDay();
+        final int racers = cap + 4;
+
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(racers);
+        try {
+            var start = new java.util.concurrent.CountDownLatch(1);
+            var allowed = new java.util.concurrent.atomic.AtomicInteger();
+            var failed = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+
+            var done = new java.util.concurrent.CountDownLatch(racers);
+            for (int i = 0; i < racers; i++) {
+                pool.submit(() -> {
+                    try {
+                        start.await();
+                        if (guard.tryConsume(ip, GrantKind.WELCOME)) allowed.incrementAndGet();
+                    } catch (Throwable t) {
+                        failed.compareAndSet(null, t);
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            }
+            start.countDown();
+            assertTrue(done.await(30, java.util.concurrent.TimeUnit.SECONDS), "threads did not finish");
+
+            assertNull(failed.get(), () -> "a racing request failed instead of being counted: " + failed.get());
+            // The cap is the point: more racers than allowance, and the allowance still holds.
+            assertEquals(cap, allowed.get(),
+                    "exactly the cap should be allowed, no more and no fewer");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
 }

@@ -46,5 +46,13 @@ public class AuthIssuerProperties {
 
         /** Where this instance publishes its signing keys. */
         private String jwksUri;
+
+        /**
+         * Base URL for server-to-server calls to this auth instance, e.g. marking a guest as
+         * retained. Distinct from {@link #issuer}, which is a claim value and need not be
+         * reachable, and from {@link #jwksUri}, which is a single document. Blank disables the
+         * calls for this issuer.
+         */
+        private String internalBaseUrl;
     }
 }

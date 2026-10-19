@@ -1,0 +1,48 @@
+-- Widens credit_ledger.idempotency_key so a raw Google Play purchase token fits.
+--
+-- The column was VARCHAR(100). A Play purchase token runs to several hundred characters, and the
+-- purchase path wrote it into the key verbatim, so MySQL rejected the row with
+--
+--     Data truncation: Data too long for column 'idempotency_key' at row 1
+--
+-- The ledger insert is issued inside the crediting transaction, so the rejection rolled the whole
+-- grant back: the buyer was charged by Google and credited nothing.
+--
+-- Two independent fixes, deliberately:
+--
+--   1. The service now stores a SHA-256 of the token ("purchase:<64 hex>", 73 characters) instead
+--      of the token itself, and bounds any caller-supplied Idempotency-Key the same way. That is
+--      the real fix and it needs no schema change.
+--
+--   2. This migration, which makes the column wide enough for the raw token regardless. It exists
+--      because (1) only takes effect once the new build is deployed, while this can be applied to
+--      a running database immediately, and because a column that cannot hold what the service
+--      accepts is a trap for the next person.
+--
+-- 512 matches CreditsService.MAX_PURCHASE_TOKEN_LENGTH, the longest token the service will accept
+-- at all, so the column can now hold anything that gets as far as the insert.
+--
+-- Index width: the column is part of UNIQUE KEY (user_id, idempotency_key). In utf8mb4 that index
+-- becomes 64*4 + 512*4 = 2304 bytes, within InnoDB's 3072-byte limit for the DYNAMIC row format
+-- that MySQL 8 uses by default. Verify before running on a server with an older row format:
+--
+--     SELECT row_format FROM information_schema.tables
+--      WHERE table_schema = DATABASE() AND table_name = 'credit_ledger';
+--
+-- COMPACT or REDUNDANT caps an index at 767 bytes and this ALTER will be rejected; convert with
+-- ALTER TABLE credit_ledger ROW_FORMAT=DYNAMIC first.
+--
+-- Locking: widening a VARCHAR that is part of an index rebuilds the table. Check the size first
+--
+--     SELECT COUNT(*) FROM credit_ledger;
+--
+-- and if it is large enough to matter, run the ALTER with ALGORITHM=INPLACE, LOCK=NONE so writes
+-- continue during the rebuild. The plain form below is used because it works on every version and
+-- fails loudly rather than silently degrading.
+--
+-- Existing rows are unaffected: widening never truncates, and no short key changes, so every
+-- stored key still matches on retry exactly as before. Nothing needs backfilling — the failing
+-- inserts were rejected outright, so no truncated rows were ever written.
+
+ALTER TABLE credit_ledger
+    MODIFY COLUMN idempotency_key VARCHAR(512) DEFAULT NULL;
