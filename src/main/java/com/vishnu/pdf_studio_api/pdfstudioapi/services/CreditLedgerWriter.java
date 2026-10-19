@@ -124,17 +124,36 @@ public class CreditLedgerWriter {
     public int transferGuestBalance(String guestUserId, String targetUserId, String ip) {
         if (guestUserId == null || guestUserId.equals(targetUserId)) return 0;
 
-        var guestAccount = accountRepository.findForUpdate(guestUserId).orElse(null);
-        if (guestAccount == null || guestAccount.getBalance() <= 0) return 0;
-
-        final int amount = guestAccount.getBalance();
         final String key = "guest-transfer:" + guestUserId;
 
-        // Already moved (a retried sign-in) — leave both balances alone.
+        // Both cheap checks first, without taking a lock: already moved (a retried sign-in or
+        // claim), or no such guest to move anything from. Neither reads a balance — the locked
+        // read below is the only authority on that.
         if (ledgerRepository.existsByUserIdAndIdempotencyKey(targetUserId, key)) return 0;
+        if (!accountRepository.existsById(guestUserId)) return 0;
 
         accountService.ensure(targetUserId, ip);
-        CreditAccount target = lockAccount(targetUserId);
+
+        // Locked in a fixed order by key, not source-then-target. This is the only operation
+        // that holds two account locks, and a claim runs guest-to-guest, so "drain first, credit
+        // second" would let two opposite claims take the same pair of locks in opposite orders
+        // and deadlock — the way concurrent first requests deadlocked the per-IP counter. A total
+        // order removes the possibility instead of making it unlikely.
+        final CreditAccount guestAccount;
+        final CreditAccount target;
+        if (guestUserId.compareTo(targetUserId) < 0) {
+            guestAccount = lockAccount(guestUserId);
+            target = lockAccount(targetUserId);
+        } else {
+            target = lockAccount(targetUserId);
+            guestAccount = lockAccount(guestUserId);
+        }
+
+        // Read only now that the row is locked. A concurrent transfer of the same guest waits
+        // here and then finds nothing left, which is what keeps the transfer single — the
+        // unique ledger key is the backstop, not the mechanism.
+        final int amount = guestAccount.getBalance();
+        if (amount <= 0) return 0;
 
         applyDelta(guestAccount, -amount, CreditReason.TRANSFER, null, key, ip);
         applyDelta(target, amount, CreditReason.TRANSFER, null, key, ip);
