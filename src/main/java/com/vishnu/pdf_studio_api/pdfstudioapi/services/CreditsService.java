@@ -305,11 +305,13 @@ public class CreditsService {
                     "Google Play could not verify this purchase.");
         }
 
-        // Falls back to the caller when Play has no account id — an older client that did not
-        // attach one. reconcilePurchase makes the same allowance for the same reason.
-        final String owner = (result.accountId() == null || result.accountId().isBlank())
-                ? callerId
-                : PrincipalKey.of(playAccountAlias, result.accountId());
+        // Falls back to the caller when Play reports no usable account id: an older client that
+        // attached none, or one that attached something that is not an id this service issues.
+        // The value is client-supplied, so it is checked rather than trusted — see
+        // PrincipalKey.isValidSubject. Crediting the caller is the safe fallback either way,
+        // because the caller is the one holding a verified token. reconcilePurchase cannot make
+        // the same allowance: it has no caller.
+        final String owner = ownerFromPlay(result.accountId()).orElse(callerId);
 
         final int ownerBalance = ledgerWriter.grantPurchase(
                 owner, purchaseToken, productId, result.orderId(), creditsToAdd, ip);
@@ -413,14 +415,15 @@ public class CreditsService {
             log.warn("RTDN purchase did not verify with Play — not crediting.");
             return;
         }
-        if (result.accountId() == null || result.accountId().isBlank()) {
-            log.warn("RTDN purchase has no obfuscated account id; leaving it for the client to redeem.");
+        // No caller to fall back on here, so an absent or malformed account id means this
+        // delivery cannot be attributed and is left for the client's own redemption.
+        var owner = ownerFromPlay(result.accountId());
+        if (owner.isEmpty()) {
+            log.warn("RTDN purchase has no usable obfuscated account id; leaving it for the client to redeem.");
             return;
         }
 
-        // Play purchases only ever originate in the mobile app, so the raw subject the client
-        // attached is namespaced with that issuer's alias to match how the account is keyed.
-        final String userId = PrincipalKey.of(playAccountAlias, result.accountId());
+        final String userId = owner.get();
         ledgerWriter.grantPurchase(userId, purchaseToken, productId, result.orderId(), credits, null);
         authInternal.retain(userId);
 
@@ -463,6 +466,26 @@ public class CreditsService {
 
     // ── internal helpers ──────────────────────────────────────────────────────────
 
+
+    /**
+     * The account key for a Play-reported obfuscated external account id.
+     *
+     * <p>Play purchases only ever originate in the mobile app, so the subject is namespaced with
+     * that issuer's alias to match how accounts are keyed. The subject itself is attached by the
+     * client, which makes it the one identifier here that does not come from a verified token:
+     * anything outside the shape auth issues is refused, so a crafted value cannot become an
+     * account key, a path segment in a server-to-server call, or a log line of its own choosing.
+     *
+     * @return empty when Play reported no account id, or one this service would not issue
+     */
+    private java.util.Optional<String> ownerFromPlay(String playAccountId) {
+        if (playAccountId == null || playAccountId.isBlank()) return java.util.Optional.empty();
+        if (!PrincipalKey.isValidSubject(playAccountId)) {
+            log.warn("Play reported an obfuscated account id that is not a valid subject; ignoring it.");
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(PrincipalKey.of(playAccountAlias, playAccountId));
+    }
 
     private java.time.Instant startOfTodayUtc() {
         return LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant();

@@ -151,4 +151,49 @@ class PurchaseOwnershipTest {
                 () -> creditsService.claimPurchase("other-" + UUID.randomUUID(), tok, PRODUCT, null));
         assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
     }
+
+    @Test
+    @DisplayName("a Play account id this service would never issue is not trusted as an identity")
+    void aMalformedPlayAccountIdFallsBackToTheCaller() {
+        // The obfuscated external account id is attached by the client, so it is the one subject
+        // here that no token vouches for. Left unchecked it became an account key and a path
+        // segment in a server-to-server URL.
+        playSays("../../internal/users/victim");
+        final String caller = "app:CALLER" + UUID.randomUUID().toString().replace("-", "");
+        int before = creditsService.getBalance(caller, null);
+
+        var outcome = creditsService.purchaseCredits(caller, token(), PRODUCT, null);
+
+        assertTrue(outcome.creditedToCaller(),
+                "with no usable account id the caller — who holds a verified token — is credited");
+        assertTrue(creditsService.getBalance(caller, null) > before);
+    }
+
+    @Test
+    @DisplayName("a guest transfer works whichever way the two ids sort")
+    void transferWorksInBothLockOrders() {
+        // The transfer is the only operation holding two account locks, and a claim runs
+        // guest-to-guest, so the rows are locked in a fixed order by key rather than
+        // drain-then-credit — two opposite claims would otherwise deadlock. Both branches of
+        // that ordering have to move the credits; exercising only one would leave half of it
+        // untested and the deadlock is not reproducible from a single-threaded test.
+        final String low = "app:AAA" + UUID.randomUUID().toString().replace("-", "");
+        final String high = "app:ZZZ" + UUID.randomUUID().toString().replace("-", "");
+
+        int lowBalance = creditsService.getBalance(low, null);
+        int highBalance = creditsService.getBalance(high, null);
+        assertTrue(lowBalance > 0, "the welcome grant should have given the guest something to move");
+
+        assertEquals(lowBalance, creditsService.transferGuestBalance(low, high, null),
+                "source sorting before target");
+        assertEquals(0, creditsService.getBalance(low, null));
+        assertEquals(highBalance + lowBalance, creditsService.getBalance(high, null));
+
+        final String other = "app:MMM" + UUID.randomUUID().toString().replace("-", "");
+        int otherBalance = creditsService.getBalance(other, null);
+        int highNow = creditsService.getBalance(high, null);
+        assertEquals(highNow, creditsService.transferGuestBalance(high, other, null),
+                "source sorting after target");
+        assertEquals(otherBalance + highNow, creditsService.getBalance(other, null));
+    }
 }
