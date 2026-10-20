@@ -53,6 +53,15 @@ public class PurchaseAuditLog {
     @Column(name = "product_id", length = 100, nullable = false)
     private String productId;
 
+    /**
+     * Which billing provider verified this purchase. Lowercase name of a
+     * {@link com.vishnu.pdf_studio_api.pdfstudioapi.enums.BillingChannel}. Always set for a Play
+     * purchase row written today; nullable so the column can be added without a backfill of
+     * every historical row at once.
+     */
+    @Column(name = "channel", length = 16)
+    private String channel;
+
     // Hibernate 6 maps an enum to MySQL's native enum(...) type by default, which the
     // VARCHAR in the migration does not match — the service then refuses to start under
     // ddl-auto=validate. VARCHAR is also the better column: adding a value to the enum

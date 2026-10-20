@@ -1,5 +1,6 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.BillingChannel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.CreditReason;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.PurchaseStatus;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.CreditAccount;
@@ -50,9 +51,15 @@ public class CreditLedgerWriter {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found."));
     }
 
-    /** Applies a signed delta to the locked account and writes the matching ledger row. */
+    /**
+     * Applies a signed delta to the locked account and writes the matching ledger row.
+     *
+     * <p>{@code channel} says which payment provider funded a billing movement (play, razorpay,
+     * admin); pass null for non-billing flows (daily, rewarded_ad, debit, transfer) — the
+     * {@code reason} is sufficient on its own.
+     */
     public void applyDelta(CreditAccount account, int delta, CreditReason reason,
-                           String toolId, String idempotencyKey, String ip) {
+                           String toolId, String idempotencyKey, String ip, BillingChannel channel) {
         account.setBalance(account.getBalance() + delta);
         accountRepository.save(account);
         ledgerRepository.save(CreditLedger.builder()
@@ -60,6 +67,7 @@ public class CreditLedgerWriter {
                 .toolId(toolId)
                 .delta(delta)
                 .reason(reason)
+                .channel(channel == null ? null : channel.code())
                 .idempotencyKey(idempotencyKey)
                 .balanceAfter(account.getBalance())
                 .ip(ip)
@@ -67,9 +75,11 @@ public class CreditLedgerWriter {
     }
 
     public void saveAudit(String userId, String token, String orderId, String productId,
-                          PurchaseStatus status, Integer creditsGranted, String ip) {
+                          PurchaseStatus status, Integer creditsGranted, String ip,
+                          BillingChannel channel) {
         purchaseAuditLogRepository.save(PurchaseAuditLog.builder()
                 .userId(userId).purchaseToken(token).orderId(orderId).productId(productId)
+                .channel(channel == null ? null : channel.code())
                 .status(status).creditsGranted(creditsGranted).ip(ip).build());
     }
 
@@ -81,22 +91,35 @@ public class CreditLedgerWriter {
      * <p>Called once the purchase has already been verified with Play, so this does no I/O beyond
      * the database and the transaction stays short.
      *
+     * <p>Two callers race on the same purchase: the client's {@code /claim-purchase} and the Play
+     * RTDN webhook's {@code reconcilePurchase}. Both compute the same idempotency key
+     * {@code purchase:<token>}. The DB's {@code uq(user_id, idempotency_key)} on
+     * {@code credit_ledger} keeps the grant single — one write wins, the loser's insert throws
+     * {@link DataIntegrityViolationException} and this transaction rolls back.
+     *
+     * <p>The loser's error is <em>not</em> caught here on purpose. Hibernate marks the transaction
+     * rollback-only the moment the constraint fires during flush, so swallowing the exception
+     * inside this method would make Spring throw {@code UnexpectedRollbackException} at commit
+     * time — surfacing to the client as a 500 even though the credits are safely on the account.
+     * {@code CreditsService.purchaseCredits} catches the exception in a non-transactional context,
+     * reads the current balance, and returns a success outcome.
+     *
      * @return the owner's balance afterwards
-     * @throws ResponseStatusException CONFLICT when a concurrent call granted the same token first
      */
     @Transactional
     public int grantPurchase(String owner, String purchaseToken, String productId,
-                             String orderId, int credits, String ip) {
+                             String orderId, int credits, String ip, BillingChannel channel) {
         accountService.ensure(owner, ip);
         CreditAccount account = lockAccount(owner);
         applyDelta(account, credits, CreditReason.PURCHASE, null,
-                PurchaseTokens.ledgerKey("purchase", purchaseToken), ip);
+                PurchaseTokens.ledgerKey("purchase", purchaseToken), ip, channel);
         try {
             saveAudit(owner, purchaseToken, orderId, productId,
-                    PurchaseStatus.GRANTED, credits, ip);
+                    PurchaseStatus.GRANTED, credits, ip, channel);
         } catch (DataIntegrityViolationException dup) {
             // Lost the race on uq(token_hash, GRANTED). The credits exist, on whichever account
-            // won; rolling this one back is what keeps the grant single.
+            // won; rolling this one back is what keeps the grant single. The exception propagates
+            // out, Spring rolls back cleanly.
             throw new ResponseStatusException(HttpStatus.CONFLICT, "This purchase is being redeemed.");
         }
         return account.getBalance();
@@ -109,7 +132,8 @@ public class CreditLedgerWriter {
                 PurchaseTokens.hash(purchaseToken), PurchaseStatus.VERIFICATION_FAILED)) {
             return;
         }
-        saveAudit(userId, purchaseToken, null, productId, PurchaseStatus.VERIFICATION_FAILED, null, ip);
+        saveAudit(userId, purchaseToken, null, productId, PurchaseStatus.VERIFICATION_FAILED, null, ip,
+                BillingChannel.PLAY);
     }
 
     /**
@@ -155,8 +179,8 @@ public class CreditLedgerWriter {
         final int amount = guestAccount.getBalance();
         if (amount <= 0) return 0;
 
-        applyDelta(guestAccount, -amount, CreditReason.TRANSFER, null, key, ip);
-        applyDelta(target, amount, CreditReason.TRANSFER, null, key, ip);
+        applyDelta(guestAccount, -amount, CreditReason.TRANSFER, null, key, ip, null);
+        applyDelta(target, amount, CreditReason.TRANSFER, null, key, ip, null);
 
         log.info("Transferred {} credit(s) from guest {} to {}", amount, guestUserId, targetUserId);
         return amount;

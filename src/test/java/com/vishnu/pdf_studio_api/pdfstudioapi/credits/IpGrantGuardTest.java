@@ -80,27 +80,18 @@ class IpGrantGuardTest {
         String ip = uniqueIp();
         // Burn the IP's welcome allowance on throwaway accounts.
         for (int i = 0; i < creditProperties.getWelcomeGrantsPerIpPerDay(); i++) {
-            creditsService.getBalance("web:burn-" + UUID.randomUUID(), ip);
+            creditsService.getBalance("burn-" + UUID.randomUUID(), ip);
         }
-        int balance = creditsService.getBalance("web:" + UUID.randomUUID(), ip);
+        int balance = creditsService.getBalance(UUID.randomUUID().toString(), ip);
         assertEquals(0, balance,
                 "clearing site data for a fresh guest must not yield another welcome balance");
     }
 
-    @Test
-    @DisplayName("accounts namespaced to different issuers are entirely separate")
-    void issuerNamespacesAreSeparate() {
-        String subject = UUID.randomUUID().toString();
-        String appUser = "app:" + subject;
-        String webUser = "web:" + subject;   // same subject, different auth instance
-
-        int appOpening = creditsService.getBalance(appUser, uniqueIp());
-        creditsService.charge(appUser, "grayscale-pdf", 0L, "ns-" + subject, null);
-
-        assertEquals(appOpening - 1, creditsService.getBalance(appUser, null));
-        assertNotEquals(appOpening - 1, creditsService.getBalance(webUser, uniqueIp()),
-                "the same subject from a different issuer must not share the balance");
-    }
+    // Removed: "accounts namespaced to different issuers are entirely separate".
+    // The two deployments (app/web) collapsed into one issuer, so there is only one subject
+    // space now — the invariant this test asserted no longer applies.
+    // See AuthIssuerProperties javadoc and the Subjects/SubjectJwtAuthenticationConverter
+    // rename that removed PrincipalKey.aliasOf.
 
     @Test
     @DisplayName("simultaneous first requests from one IP neither deadlock nor exceed the cap")

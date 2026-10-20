@@ -34,3 +34,6 @@ build/
 
 # Google Play service-account credentials — bind-mounted into the container, never committed.
 pdf-craft-*.json
+
+# Play RTDN shared-secret guard — generated per environment, never committed.
+.rtdn.secret

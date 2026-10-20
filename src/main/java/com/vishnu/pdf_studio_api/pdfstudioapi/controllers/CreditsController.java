@@ -76,11 +76,11 @@ public class CreditsController {
     @PostMapping("/transfer-guest")
     public ResponseEntity<Map<String, Object>> transferGuest(@RequestBody Map<String, String> body,
                                                              HttpServletRequest request) {
-        String guestPrincipal = issuerTokenDecoders.principalKeyOf(body.get("guestToken"))
+        String guestSubject = issuerTokenDecoders.subjectOf(body.get("guestToken"))
                 .orElseThrow(() -> ApiException.badRequest("That guest session is no longer valid."));
 
         int moved = creditsService.transferGuestBalance(
-                guestPrincipal, CurrentUser.requireId(), ClientIp.of(request));
+                guestSubject, CurrentUser.requireId(), ClientIp.of(request));
 
         return ResponseEntity.ok(Map.of("success", true,
                 "message", moved > 0 ? "Your credits have been moved to your account." : "Nothing to move.",
