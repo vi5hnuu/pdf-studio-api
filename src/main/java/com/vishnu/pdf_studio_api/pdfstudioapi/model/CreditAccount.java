@@ -23,11 +23,8 @@ import java.time.LocalDate;
 public class CreditAccount {
 
     /**
-     * Namespaced auth id: {@code "<issuer alias>:<sub>"}.
-     *
-     * <p>Not the bare JWT subject — the app's and the web's auth deployments have separate
-     * databases and generate ids independently, so two unrelated people can hold the same subject.
-     * See {@link com.vishnu.pdf_studio_api.pdfstudioapi.security.PrincipalKey}.
+     * The auth service's user id (the JWT subject). Unique because one auth deployment serves
+     * both the mobile app and the web tier.
      */
     @Id
     @Column(name = "user_id", length = 64, nullable = false, updatable = false)

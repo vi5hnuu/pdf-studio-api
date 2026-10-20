@@ -44,15 +44,14 @@ class ToolEndpointTest {
     }
 
     /**
-     * Authenticates as an already-namespaced principal.
+     * Authenticates as a principal whose name is the bare JWT subject.
      *
-     * MockMvc's {@code jwt()} builds the authentication directly and so does not run
-     * {@code NamespacedJwtAuthenticationConverter}; the subject is therefore given in the
-     * form that converter produces. The namespacing itself is covered by
-     * {@code NamespacedJwtAuthenticationConverterTest}.
+     * <p>MockMvc's {@code jwt()} builds the authentication directly and so does not run
+     * {@code SubjectJwtAuthenticationConverter}; the subject value supplied here is used
+     * as-is for {@link org.springframework.security.core.Authentication#getName()}.
      */
-    private static org.springframework.test.web.servlet.request.RequestPostProcessor asUser(String principalKey) {
-        return jwt().jwt(builder -> builder.subject(principalKey).claim("roles", java.util.List.of("ROLE_USER")))
+    private static org.springframework.test.web.servlet.request.RequestPostProcessor asUser(String subject) {
+        return jwt().jwt(builder -> builder.subject(subject).claim("roles", java.util.List.of("ROLE_USER")))
                 .authorities(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
     }
 
@@ -88,7 +87,7 @@ class ToolEndpointTest {
         byte[] zip = {'P', 'K', 0x03, 0x04, 0, 0, 0, 0};
         MvcResult result = mockMvc.perform(multipart("/api/v1/pdf-studio/grayscale-pdf")
                         .file(new MockMultipartFile("file", "payload.pdf", "application/pdf", zip))
-                        .with(asUser("app:u-" + UUID.randomUUID())).with(fromUniqueIp()))
+                        .with(asUser("u-" + UUID.randomUUID())).with(fromUniqueIp()))
                 .andReturn();
 
         assertEquals(422, result.getResponse().getStatus());
@@ -101,7 +100,7 @@ class ToolEndpointTest {
     @Test
     @DisplayName("a valid run returns the file, a safe filename and the credit headers")
     void runsAndChargesOnce() throws Exception {
-        String userId = "app:sub-" + UUID.randomUUID();
+        String userId = "sub-" + UUID.randomUUID();
         String key = "idem-" + UUID.randomUUID();
 
         MvcResult first = mockMvc.perform(multipart("/api/v1/pdf-studio/grayscale-pdf")
@@ -137,7 +136,7 @@ class ToolEndpointTest {
     @Test
     @DisplayName("a free tool runs without touching the balance")
     void freeToolIsNotCharged() throws Exception {
-        String userId = "app:sub-" + UUID.randomUUID();
+        String userId = "sub-" + UUID.randomUUID();
         int opening = creditsService.getBalance(userId, null);
 
         MvcResult result = mockMvc.perform(multipart("/api/v1/pdf-studio/sanitize-pdf")

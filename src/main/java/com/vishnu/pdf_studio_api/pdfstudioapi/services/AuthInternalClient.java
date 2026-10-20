@@ -3,7 +3,6 @@ package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.AuthIssuerProperties;
-import com.vishnu.pdf_studio_api.pdfstudioapi.security.PrincipalKey;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,12 +15,12 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.Optional;
 
 /**
  * Server-to-server calls into the auth service, for the two facts this service cannot know itself:
@@ -69,15 +68,14 @@ public class AuthInternalClient {
             new ThreadPoolExecutor.AbortPolicy());
 
     /**
-     * Clears the guest expiry for the account behind [principalKey].
+     * Clears the guest expiry for the account behind [subject].
      *
-     * <p>Never on the caller's thread, and never inside a caller's transaction.
-     *
-     * <p>Off the thread because this is best-effort bookkeeping on the purchase path: the buyer
-     * should not wait on the auth service to be told their credits arrived, and a slow dependency
-     * should not consume a request thread. It runs on a small bounded pool and is dropped under
-     * saturation rather than queued — a missed retention restores an old risk for one account,
-     * where an unbounded queue behind a failing dependency is an out-of-memory error.
+     * <p>Never on the caller's thread, and never inside a caller's transaction. Off the thread
+     * because this is best-effort bookkeeping on the purchase path: the buyer should not wait on
+     * the auth service to be told their credits arrived, and a slow dependency should not consume
+     * a request thread. It runs on a small bounded pool and is dropped under saturation rather
+     * than queued — a missed retention restores an old risk for one account, where an unbounded
+     * queue behind a failing dependency is an out-of-memory error.
      *
      * <p>The transaction check is defence in depth. Today every caller is deliberately
      * non-transactional, so this runs immediately; the callers were restructured precisely so
@@ -85,42 +83,37 @@ public class AuthInternalClient {
      * row lock are held. Deferring to after commit keeps that guarantee if this is ever called
      * from somewhere transactional, and stops a retention being recorded for a purchase that
      * then rolls back.
-     *
-     * @param principalKey the {@code alias:sub} this service keys accounts by
      */
-    public void retain(String principalKey) {
+    public void retain(String subject) {
         if (internalSecret == null || internalSecret.isBlank()) return;
 
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    submitRetain(principalKey);
+                    submitRetain(subject);
                 }
             });
             return;
         }
-        submitRetain(principalKey);
+        submitRetain(subject);
     }
 
-    private void submitRetain(String principalKey) {
+    private void submitRetain(String subject) {
         try {
-            retainExecutor.execute(() -> retainNow(principalKey));
+            retainExecutor.execute(() -> retainNow(subject));
         } catch (RejectedExecutionException saturated) {
-            log.warn("Guest retention for {} dropped: retention queue is full", principalKey);
+            log.warn("Guest retention for {} dropped: retention queue is full", subject);
         }
     }
 
     /** The blocking call itself, always off the request thread. */
-    private void retainNow(String principalKey) {
+    private void retainNow(String subject) {
+        if (subject == null || subject.isBlank()) return;
 
-        final String alias = PrincipalKey.aliasOf(principalKey);
-        final String subject = PrincipalKey.subjectOf(principalKey);
-        if (alias == null || subject == null || subject.isBlank()) return;
-
-        final String baseUrl = baseUrlFor(alias);
-        if (baseUrl == null) {
-            log.warn("No auth base URL configured for alias '{}'; guest retention skipped.", alias);
+        final String baseUrl = authProperties.getInternalBaseUrl();
+        if (baseUrl == null || baseUrl.isBlank()) {
+            log.warn("No auth internal base URL configured; guest retention skipped.");
             return;
         }
 
@@ -133,32 +126,29 @@ public class AuthInternalClient {
                     .build();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
-                log.warn("Guest retention for {} returned HTTP {}", principalKey, response.statusCode());
+                log.warn("Guest retention for {} returned HTTP {}", subject, response.statusCode());
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-            log.warn("Guest retention for {} was interrupted", principalKey);
+            log.warn("Guest retention for {} was interrupted", subject);
         } catch (Exception e) {
-            log.warn("Guest retention for {} failed: {}", principalKey, e.getMessage());
+            log.warn("Guest retention for {} failed: {}", subject, e.getMessage());
         }
     }
 
     /**
-     * Whether the account behind [principalKey] is an anonymous guest.
+     * Whether the account behind [subject] is an anonymous guest.
      *
      * <p>Decides whether a purchase may be reclaimed by a different session. Empty when the answer
      * cannot be obtained, and the caller must read that as "do not transfer": guessing wrong here
      * hands one person's purchase to another.
      */
-    public Optional<Boolean> isGuest(String principalKey) {
+    public Optional<Boolean> isGuest(String subject) {
         if (internalSecret == null || internalSecret.isBlank()) return Optional.empty();
+        if (subject == null || subject.isBlank()) return Optional.empty();
 
-        final String alias = PrincipalKey.aliasOf(principalKey);
-        final String subject = PrincipalKey.subjectOf(principalKey);
-        if (alias == null || subject == null || subject.isBlank()) return Optional.empty();
-
-        final String baseUrl = baseUrlFor(alias);
-        if (baseUrl == null) return Optional.empty();
+        final String baseUrl = authProperties.getInternalBaseUrl();
+        if (baseUrl == null || baseUrl.isBlank()) return Optional.empty();
 
         try {
             HttpRequest request = HttpRequest.newBuilder(
@@ -176,18 +166,8 @@ public class AuthInternalClient {
             Thread.currentThread().interrupt();
             return Optional.empty();
         } catch (Exception e) {
-            log.warn("Could not read account type for {}: {}", principalKey, e.getMessage());
+            log.warn("Could not read account type for {}: {}", subject, e.getMessage());
             return Optional.empty();
         }
-    }
-
-    /** The configured base URL of the auth instance that issued this alias. */
-    private String baseUrlFor(String alias) {
-        return authProperties.getIssuers().stream()
-                .filter(i -> alias.equals(i.getAlias()))
-                .map(AuthIssuerProperties.Issuer::getInternalBaseUrl)
-                .filter(url -> url != null && !url.isBlank())
-                .findFirst()
-                .orElse(null);
     }
 }

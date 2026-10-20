@@ -174,8 +174,8 @@ class CreditsServiceTest {
     @Test
     @DisplayName("a guest's credits move to the account they sign in to")
     void transfersGuestBalance() {
-        String guest = "web:" + UUID.randomUUID();
-        String account = "app:" + UUID.randomUUID();
+        String guest = UUID.randomUUID().toString();
+        String account = UUID.randomUUID().toString();
 
         int guestOpening = creditsService.getBalance(guest, null);
         int accountOpening = creditsService.getBalance(account, null);
@@ -191,8 +191,8 @@ class CreditsServiceTest {
     @Test
     @DisplayName("signing in twice does not move the credits twice")
     void transferIsIdempotent() {
-        String guest = "web:" + UUID.randomUUID();
-        String account = "app:" + UUID.randomUUID();
+        String guest = UUID.randomUUID().toString();
+        String account = UUID.randomUUID().toString();
         creditsService.getBalance(guest, null);
         int accountOpening = creditsService.getBalance(account, null);
 
@@ -207,11 +207,11 @@ class CreditsServiceTest {
     @Test
     @DisplayName("transferring to the same account, or from an empty guest, is a no-op")
     void transferNoOps() {
-        String account = "app:" + UUID.randomUUID();
+        String account = UUID.randomUUID().toString();
         creditsService.getBalance(account, null);
 
         assertEquals(0, creditsService.transferGuestBalance(account, account, null));
-        assertEquals(0, creditsService.transferGuestBalance("web:never-seen-" + UUID.randomUUID(), account, null));
+        assertEquals(0, creditsService.transferGuestBalance("never-seen-" + UUID.randomUUID(), account, null));
     }
 
     @Test

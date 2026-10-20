@@ -44,7 +44,7 @@ class WebPayloadContractTest {
     }
 
     private RequestPostProcessor user() {
-        return jwt().jwt(b -> b.subject("app:" + UUID.randomUUID()).claim("roles", List.of("ROLE_USER")))
+        return jwt().jwt(b -> b.subject(UUID.randomUUID().toString()).claim("roles", List.of("ROLE_USER")))
                 .authorities((org.springframework.security.core.GrantedAuthority)
                         new SimpleGrantedAuthority("ROLE_USER"));
     }

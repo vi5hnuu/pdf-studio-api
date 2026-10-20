@@ -62,7 +62,7 @@ class NoNetworkInTransactionTest {
         final String user = "u-" + UUID.randomUUID();
         var inTransaction = recordVerifyContext(user);
 
-        creditsService.purchaseCredits("app:" + user, "tok-" + UUID.randomUUID(), PRODUCT, null);
+        creditsService.purchaseCredits(user, "tok-" + UUID.randomUUID(), PRODUCT, null);
 
         assertFalse(inTransaction.get(),
                 "Play was called inside a transaction, holding a pooled connection across the network");
@@ -86,7 +86,7 @@ class NoNetworkInTransactionTest {
         final String guest = "g-" + UUID.randomUUID();
         recordVerifyContext(guest);
         final String token = "tok-" + UUID.randomUUID();
-        creditsService.purchaseCredits("app:" + guest, token, PRODUCT, null);
+        creditsService.purchaseCredits(guest, token, PRODUCT, null);
 
         final AtomicBoolean inTransaction = new AtomicBoolean(true);
         when(authInternal.isGuest(anyString())).thenAnswer(call -> {
@@ -109,17 +109,17 @@ class NoNetworkInTransactionTest {
         recordVerifyContext(user);
         final String token = "tok-" + UUID.randomUUID();
 
-        int before = creditsService.getBalance("app:" + user, null);
-        creditsService.purchaseCredits("app:" + user, token, PRODUCT, null);
-        int after = creditsService.getBalance("app:" + user, null);
+        int before = creditsService.getBalance(user, null);
+        creditsService.purchaseCredits(user, token, PRODUCT, null);
+        int after = creditsService.getBalance(user, null);
         assertTrue(after > before);
 
         // A replay is reported, not granted again, which is only true if the first audit row
         // committed with the credit.
-        var replay = creditsService.purchaseCredits("app:" + user, token, PRODUCT, null);
+        var replay = creditsService.purchaseCredits(user, token, PRODUCT, null);
         assertTrue(replay.alreadyGranted());
         assertEquals(0, replay.creditsGranted());
-        assertEquals(after, creditsService.getBalance("app:" + user, null));
+        assertEquals(after, creditsService.getBalance(user, null));
     }
 
     @Test

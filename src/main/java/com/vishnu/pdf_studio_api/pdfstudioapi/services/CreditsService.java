@@ -1,17 +1,18 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.services;
 
 import com.vishnu.pdf_studio_api.pdfstudioapi.configuration.CreditProperties;
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.BillingChannel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.CreditReason;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.GrantKind;
 import com.vishnu.pdf_studio_api.pdfstudioapi.dto.response.LedgerEntryResponse;
 import com.vishnu.pdf_studio_api.pdfstudioapi.enums.PurchaseStatus;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.*;
 import com.vishnu.pdf_studio_api.pdfstudioapi.repository.*;
-import com.vishnu.pdf_studio_api.pdfstudioapi.security.PrincipalKey;
-import org.springframework.beans.factory.annotation.Value;
+import com.vishnu.pdf_studio_api.pdfstudioapi.security.Subjects;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.PurchaseTokens;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,13 +60,6 @@ public class CreditsService {
     private final CreditLedgerWriter ledgerWriter;
     private final CreditProperties creditProperties;
     private final IpGrantGuard ipGrantGuard;
-
-    /**
-     * Issuer alias for accounts that can make Play purchases. Play's obfuscated account id
-     * carries the bare auth subject, which has to be namespaced the same way tokens are.
-     */
-    @Value("${app.play.account-id-alias:app}")
-    private String playAccountAlias;
 
     // ── Balance & pricing ───────────────────────────────────────────────────────
 
@@ -188,7 +182,7 @@ public class CreditsService {
                             + account.getBalance() + ".");
         }
 
-        ledgerWriter.applyDelta(account, -cost, CreditReason.DEBIT, toolId, idempotencyKey, ip);
+        ledgerWriter.applyDelta(account, -cost, CreditReason.DEBIT, toolId, idempotencyKey, ip, null);
         log.info("Charged {} credit(s) for tool={} userId={} remaining={}", cost, toolId, userId, account.getBalance());
         return new ChargeResult(account.getBalance(), cost, false);
     }
@@ -215,7 +209,7 @@ public class CreditsService {
                     "You've reached today's rewarded-credit limit. Come back tomorrow.");
         }
 
-        ledgerWriter.applyDelta(account, grant, CreditReason.REWARDED_AD, null, idempotencyKey, ip);
+        ledgerWriter.applyDelta(account, grant, CreditReason.REWARDED_AD, null, idempotencyKey, ip, null);
         return new GrantResult(account.getBalance(), grant);
     }
 
@@ -237,7 +231,7 @@ public class CreditsService {
         }
         final int grant = creditProperties.getDailyAllowance();
         account.setLastDailyClaimDate(today);
-        ledgerWriter.applyDelta(account, grant, CreditReason.DAILY, null, "daily:" + userId + ":" + today, ip);
+        ledgerWriter.applyDelta(account, grant, CreditReason.DAILY, null, "daily:" + userId + ":" + today, ip, null);
         return new GrantResult(account.getBalance(), grant);
     }
 
@@ -313,8 +307,27 @@ public class CreditsService {
         // the same allowance: it has no caller.
         final String owner = ownerFromPlay(result.accountId()).orElse(callerId);
 
-        final int ownerBalance = ledgerWriter.grantPurchase(
-                owner, purchaseToken, productId, result.orderId(), creditsToAdd, ip);
+        final int ownerBalance;
+        try {
+            ownerBalance = ledgerWriter.grantPurchase(
+                    owner, purchaseToken, productId, result.orderId(), creditsToAdd, ip,
+                    BillingChannel.PLAY);
+        } catch (DataIntegrityViolationException dup) {
+            // The RTDN webhook won the race on uq(user_id, "purchase:<token>") in credit_ledger.
+            // The credits are already on the owner's account — read the current balance and
+            // return the same shape the "already granted" early-exit above uses, so the client
+            // sees a success outcome instead of a 500 "buy failed" toast.
+            //
+            // The catch MUST live out here, not inside grantPurchase: Hibernate marks the
+            // transaction rollback-only on the constraint violation, so swallowing it inside
+            // @Transactional makes Spring throw UnexpectedRollbackException at commit time.
+            // Keeping the exception on the way out lets Spring roll back cleanly.
+            final boolean toCaller = owner.equals(callerId);
+            final int callerBalance = getBalance(callerId, ip);
+            log.info("Purchase {} was already granted (concurrent writer won); owner={} caller={} callerBalance={}",
+                    purchaseToken, owner, callerId, callerBalance);
+            return new PurchaseOutcome(callerBalance, 0, true, toCaller);
+        }
 
         // A guest that has paid must outlive the auth service's guest expiry, or its credits are
         // orphaned when the account is purged. Non-blocking; see AuthInternalClient.retain.
@@ -424,7 +437,19 @@ public class CreditsService {
         }
 
         final String userId = owner.get();
-        ledgerWriter.grantPurchase(userId, purchaseToken, productId, result.orderId(), credits, null);
+        try {
+            ledgerWriter.grantPurchase(userId, purchaseToken, productId, result.orderId(), credits, null,
+                    BillingChannel.PLAY);
+        } catch (DataIntegrityViolationException dup) {
+            // The client's /purchase call won the race on uq(user_id, "purchase:<token>") first.
+            // The credits are on the owner; ack this RTDN so Pub/Sub stops redelivering.
+            // Caught here, not inside grantPurchase, so Hibernate's rollback-only mark does not
+            // turn into UnexpectedRollbackException. See grantPurchase's javadoc.
+            log.info("RTDN purchase was already granted by a concurrent writer; userId={} product={}",
+                    userId, productId);
+            authInternal.retain(userId);
+            return;
+        }
         authInternal.retain(userId);
 
         log.info("Reconciled unredeemed purchase from RTDN: userId={} product={} +{}",
@@ -456,9 +481,9 @@ public class CreditsService {
         CreditAccount account = accountRepository.findForUpdate(granted.getUserId()).orElse(null);
         if (account == null) return false;
         ledgerWriter.applyDelta(account, -amount, CreditReason.REVOKE, null,
-                PurchaseTokens.ledgerKey("revoke", purchaseToken), null);
+                PurchaseTokens.ledgerKey("revoke", purchaseToken), null, BillingChannel.PLAY);
         ledgerWriter.saveAudit(granted.getUserId(), purchaseToken, granted.getOrderId(), granted.getProductId(),
-                PurchaseStatus.CREDITS_REVOKED, null, null);
+                PurchaseStatus.CREDITS_REVOKED, null, null, BillingChannel.PLAY);
         log.info("Credits revoked (refund/void): userId={} product={} -{} balance={}",
                 granted.getUserId(), granted.getProductId(), amount, account.getBalance());
         return true;
@@ -470,21 +495,20 @@ public class CreditsService {
     /**
      * The account key for a Play-reported obfuscated external account id.
      *
-     * <p>Play purchases only ever originate in the mobile app, so the subject is namespaced with
-     * that issuer's alias to match how accounts are keyed. The subject itself is attached by the
-     * client, which makes it the one identifier here that does not come from a verified token:
-     * anything outside the shape auth issues is refused, so a crafted value cannot become an
-     * account key, a path segment in a server-to-server call, or a log line of its own choosing.
+     * <p>The subject is attached by the client, which makes it the one identifier here that does
+     * not come from a verified token: anything outside the shape auth issues is refused, so a
+     * crafted value cannot become an account key, a path segment in a server-to-server call, or
+     * a log line of its own choosing.
      *
      * @return empty when Play reported no account id, or one this service would not issue
      */
     private java.util.Optional<String> ownerFromPlay(String playAccountId) {
         if (playAccountId == null || playAccountId.isBlank()) return java.util.Optional.empty();
-        if (!PrincipalKey.isValidSubject(playAccountId)) {
+        if (!Subjects.isValid(playAccountId)) {
             log.warn("Play reported an obfuscated account id that is not a valid subject; ignoring it.");
             return java.util.Optional.empty();
         }
-        return java.util.Optional.of(PrincipalKey.of(playAccountAlias, playAccountId));
+        return java.util.Optional.of(playAccountId);
     }
 
     private java.time.Instant startOfTodayUtc() {

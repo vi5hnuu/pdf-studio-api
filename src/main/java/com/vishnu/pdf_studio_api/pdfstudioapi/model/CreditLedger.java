@@ -52,6 +52,15 @@ public class CreditLedger {
     @Column(name = "reason", nullable = false, length = 16)
     private CreditReason reason;
 
+    /**
+     * Which payment provider funded this movement (play, razorpay, admin). Null for the
+     * non-billing flows (daily, rewarded_ad, debit, transfer) — their reason is enough.
+     * Stored as the lowercase name — see {@link
+     * com.vishnu.pdf_studio_api.pdfstudioapi.enums.BillingChannel#code()}.
+     */
+    @Column(name = "channel", length = 16)
+    private String channel;
+
     /** Client- or server-supplied key making the operation idempotent; null = not deduped. */
     /**
      * Widened to 512 by V3 to match CreditsService.MAX_PURCHASE_TOKEN_LENGTH, so the column can

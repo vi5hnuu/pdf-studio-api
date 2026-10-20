@@ -59,14 +59,14 @@ class PurchaseOwnershipTest {
         // A different session redeems: the identity changed between buying and redeeming.
         final String caller = "caller-" + UUID.randomUUID();
         int callerBefore = creditsService.getBalance(caller, null);
-        int ownerBefore = creditsService.getBalance("app:" + owner, null);
+        int ownerBefore = creditsService.getBalance(owner, null);
 
         var outcome = creditsService.purchaseCredits(caller, token(), PRODUCT, null);
 
         assertFalse(outcome.creditedToCaller(), "the caller does not own this purchase");
         assertEquals(callerBefore, creditsService.getBalance(caller, null),
                 "the caller's balance must not move");
-        assertTrue(creditsService.getBalance("app:" + owner, null) > ownerBefore,
+        assertTrue(creditsService.getBalance(owner, null) > ownerBefore,
                 "the owner recorded by Play must be credited");
     }
 
@@ -77,7 +77,7 @@ class PurchaseOwnershipTest {
         playSays(user);
         final String tok = token();
 
-        var first = creditsService.purchaseCredits("app:" + user, tok, PRODUCT, null);
+        var first = creditsService.purchaseCredits(user, tok, PRODUCT, null);
         assertTrue(first.creditedToCaller());
         assertFalse(first.alreadyGranted());
         int after = first.callerBalance();
@@ -85,7 +85,7 @@ class PurchaseOwnershipTest {
         // Play redelivers the same purchase. This used to be a 409, which the client read as
         // success and acted on by consuming the purchase.
         var second = assertDoesNotThrow(
-                () -> creditsService.purchaseCredits("app:" + user, tok, PRODUCT, null),
+                () -> creditsService.purchaseCredits(user, tok, PRODUCT, null),
                 "a redelivered purchase must not be refused");
         assertTrue(second.alreadyGranted());
         assertEquals(0, second.creditsGranted(), "a replay must not grant again");
@@ -98,20 +98,20 @@ class PurchaseOwnershipTest {
         final String guest = "guest-" + UUID.randomUUID();
         playSays(guest);
         final String tok = token();
-        creditsService.purchaseCredits("app:" + guest, tok, PRODUCT, null);
-        int stranded = creditsService.getBalance("app:" + guest, null);
+        creditsService.purchaseCredits(guest, tok, PRODUCT, null);
+        int stranded = creditsService.getBalance(guest, null);
         assertTrue(stranded > 0);
 
         // The app lost that session and is now someone else.
         final String newSession = "new-" + UUID.randomUUID();
         int before = creditsService.getBalance(newSession, null);
-        when(authInternal.isGuest("app:" + guest)).thenReturn(Optional.of(true));
+        when(authInternal.isGuest(guest)).thenReturn(Optional.of(true));
 
         int moved = creditsService.claimPurchase(newSession, tok, PRODUCT, null);
 
         assertTrue(moved > 0, "the stranded credits should move");
         assertEquals(before + moved, creditsService.getBalance(newSession, null));
-        assertEquals(0, creditsService.getBalance("app:" + guest, null),
+        assertEquals(0, creditsService.getBalance(guest, null),
                 "the abandoned account must be drained, so a replay has nothing to move");
     }
 
@@ -123,15 +123,15 @@ class PurchaseOwnershipTest {
         final String registered = "real-" + UUID.randomUUID();
         playSays(registered);
         final String tok = token();
-        creditsService.purchaseCredits("app:" + registered, tok, PRODUCT, null);
-        int ownerBalance = creditsService.getBalance("app:" + registered, null);
+        creditsService.purchaseCredits(registered, tok, PRODUCT, null);
+        int ownerBalance = creditsService.getBalance(registered, null);
 
-        when(authInternal.isGuest("app:" + registered)).thenReturn(Optional.of(false));
+        when(authInternal.isGuest(registered)).thenReturn(Optional.of(false));
 
         var ex = assertThrows(ResponseStatusException.class,
                 () -> creditsService.claimPurchase("other-" + UUID.randomUUID(), tok, PRODUCT, null));
         assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
-        assertEquals(ownerBalance, creditsService.getBalance("app:" + registered, null),
+        assertEquals(ownerBalance, creditsService.getBalance(registered, null),
                 "the owner's balance must be untouched");
     }
 
@@ -141,7 +141,7 @@ class PurchaseOwnershipTest {
         final String owner = "unknown-" + UUID.randomUUID();
         playSays(owner);
         final String tok = token();
-        creditsService.purchaseCredits("app:" + owner, tok, PRODUCT, null);
+        creditsService.purchaseCredits(owner, tok, PRODUCT, null);
 
         // Auth unreachable. Allowing the transfer here would hand a purchase to a stranger on a
         // network blip, so it has to fail closed.
@@ -159,7 +159,7 @@ class PurchaseOwnershipTest {
         // here that no token vouches for. Left unchecked it became an account key and a path
         // segment in a server-to-server URL.
         playSays("../../internal/users/victim");
-        final String caller = "app:CALLER" + UUID.randomUUID().toString().replace("-", "");
+        final String caller = "CALLER" + UUID.randomUUID().toString().replace("-", "");
         int before = creditsService.getBalance(caller, null);
 
         var outcome = creditsService.purchaseCredits(caller, token(), PRODUCT, null);
@@ -177,8 +177,8 @@ class PurchaseOwnershipTest {
         // drain-then-credit — two opposite claims would otherwise deadlock. Both branches of
         // that ordering have to move the credits; exercising only one would leave half of it
         // untested and the deadlock is not reproducible from a single-threaded test.
-        final String low = "app:AAA" + UUID.randomUUID().toString().replace("-", "");
-        final String high = "app:ZZZ" + UUID.randomUUID().toString().replace("-", "");
+        final String low = "AAA" + UUID.randomUUID().toString().replace("-", "");
+        final String high = "ZZZ" + UUID.randomUUID().toString().replace("-", "");
 
         int lowBalance = creditsService.getBalance(low, null);
         int highBalance = creditsService.getBalance(high, null);
@@ -189,7 +189,7 @@ class PurchaseOwnershipTest {
         assertEquals(0, creditsService.getBalance(low, null));
         assertEquals(highBalance + lowBalance, creditsService.getBalance(high, null));
 
-        final String other = "app:MMM" + UUID.randomUUID().toString().replace("-", "");
+        final String other = "MMM" + UUID.randomUUID().toString().replace("-", "");
         int otherBalance = creditsService.getBalance(other, null);
         int highNow = creditsService.getBalance(high, null);
         assertEquals(highNow, creditsService.transferGuestBalance(high, other, null),

@@ -25,9 +25,9 @@ class CreditsEndpointTest {
     @Autowired MockMvc mockMvc;
     @Autowired CreditsService creditsService;
 
-    private RequestPostProcessor as(String principalKey, String... roles) {
+    private RequestPostProcessor as(String subject, String... roles) {
         List<String> roleList = roles.length == 0 ? List.of("ROLE_USER") : List.of(roles);
-        return jwt().jwt(b -> b.subject(principalKey).claim("roles", roleList))
+        return jwt().jwt(b -> b.subject(subject).claim("roles", roleList))
                 .authorities(roleList.stream()
                         .map(role -> (org.springframework.security.core.GrantedAuthority)
                                 new SimpleGrantedAuthority(role))
@@ -37,8 +37,8 @@ class CreditsEndpointTest {
     @Test
     @DisplayName("the ledger returns only the caller's own history")
     void ledgerIsScopedToCaller() throws Exception {
-        String mine = "app:" + UUID.randomUUID();
-        String theirs = "app:" + UUID.randomUUID();
+        String mine = UUID.randomUUID().toString();
+        String theirs = UUID.randomUUID().toString();
 
         creditsService.charge(mine, "grayscale-pdf", 0L, "mine-" + mine, null);
         creditsService.charge(theirs, "compress-pdf", 0L, "theirs-" + theirs, null);
@@ -54,7 +54,7 @@ class CreditsEndpointTest {
     @Test
     @DisplayName("ledger rows carry the signed delta and the balance after")
     void ledgerRowsAreUsable() throws Exception {
-        String user = "app:" + UUID.randomUUID();
+        String user = UUID.randomUUID().toString();
         creditsService.charge(user, "grayscale-pdf", 0L, "k-" + user, null);
 
         mockMvc.perform(get("/api/v1/credits/ledger?page=0&size=5").with(as(user)))
@@ -69,7 +69,7 @@ class CreditsEndpointTest {
     @Test
     @DisplayName("the page size is clamped so a client cannot request the whole table")
     void clampsPageSize() throws Exception {
-        String user = "app:" + UUID.randomUUID();
+        String user = UUID.randomUUID().toString();
         creditsService.getBalance(user, null);
 
         mockMvc.perform(get("/api/v1/credits/ledger?size=100000").with(as(user)))
@@ -84,7 +84,7 @@ class CreditsEndpointTest {
                         .contentType("application/json")
                         .content("""
                                 {"base_credits":5,"size_unit":"NONE","credits_per_unit":0,"unit_size":1,"active":true}""")
-                        .with(as("app:" + UUID.randomUUID())))
+                        .with(as(UUID.randomUUID().toString())))
                 .andExpect(status().isForbidden());
     }
 
@@ -97,7 +97,7 @@ class CreditsEndpointTest {
                         .contentType("application/json")
                         .content("""
                                 {"base_credits":7,"size_unit":"NONE","credits_per_unit":0,"unit_size":1,"active":true}""")
-                        .with(as("app:admin-" + UUID.randomUUID(), "ROLE_ADMIN")))
+                        .with(as("admin-" + UUID.randomUUID(), "ROLE_ADMIN")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.baseCredits").value(7));
 
@@ -113,7 +113,7 @@ class CreditsEndpointTest {
                         .contentType("application/json")
                         .content("""
                                 {"base_credits":1,"size_unit":"NONE","credits_per_unit":0,"unit_size":1,"active":true}""")
-                        .with(as("app:admin-" + UUID.randomUUID(), "ROLE_ADMIN")))
+                        .with(as("admin-" + UUID.randomUUID(), "ROLE_ADMIN")))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("TOOL_NOT_FOUND"));
     }

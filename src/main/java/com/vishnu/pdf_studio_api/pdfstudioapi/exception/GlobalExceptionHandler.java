@@ -291,7 +291,10 @@ public class GlobalExceptionHandler {
     /** Builds the envelope, logging 5xx with a stack trace and 4xx as a one-line warning. */
     private ResponseEntity<ApiError> build(HttpStatus status, String code, String message,
                                            Throwable ex, HttpServletRequest request) {
-        String traceId = UUID.randomUUID().toString().substring(0, 8);
+        // 12 hex chars = 48 bits of entropy. The previous 8 (32 bits) made grep-friendly ids but
+        // collided often enough on a busy service that two unrelated errors could share a tag;
+        // 12 keeps the tag short while making a repeat vanishingly unlikely.
+        String traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         String path = request != null ? request.getRequestURI() : "-";
         if (status.is5xxServerError()) {
             log.error("[{}] {} {} -> {} {}", traceId, request != null ? request.getMethod() : "-", path,

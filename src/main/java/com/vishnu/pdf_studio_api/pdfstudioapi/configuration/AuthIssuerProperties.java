@@ -5,20 +5,14 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.List;
-
 /**
- * Binds {@code app.auth.*} — the auth-service instances whose tokens this service accepts.
+ * Binds {@code app.auth.*} — the one auth-service instance whose tokens this service accepts.
  *
- * <p>There is more than one because the mobile app and the web tier are served by separate auth
- * deployments with separate databases (see the auth repo's {@code docs/DOCKER.md}). Each signs with
- * its own key and declares its own {@code iss}, so each needs its own JWKS and validator.
- *
- * <p>Each issuer carries an {@link Issuer#alias}. Because the two instances generate user ids
- * independently, the same id can legitimately exist in both; every per-user record here is
- * therefore keyed by {@code alias:sub} rather than {@code sub} alone, so two unrelated people can
- * never end up sharing one credit balance.
+ * <p>The mobile app and the web tier used to be served by separate auth deployments with separate
+ * databases, so every per-user record was keyed by {@code alias:subject} to keep their id spaces
+ * from colliding. The deployments have since been collapsed into one, which makes the subject
+ * unique on its own; a single-issuer configuration is both correct now and what prevents the
+ * same user showing up as two balances again.
  */
 @Component
 @ConfigurationProperties(prefix = "app.auth")
@@ -29,30 +23,16 @@ public class AuthIssuerProperties {
     /** The audience claim a token must carry to be accepted here — this product's id. */
     private String expectedAudience = "pdf-studio-api";
 
-    private List<Issuer> issuers = new ArrayList<>();
+    /** Exact {@code iss} claim value tokens from the auth service carry. */
+    private String issuer;
 
-    @Getter
-    @Setter
-    public static class Issuer {
+    /** Where the auth service publishes its signing keys. */
+    private String jwksUri;
 
-        /**
-         * Short, stable namespace prefix for user ids from this issuer (e.g. {@code app}, {@code web}).
-         * Changing it after launch orphans every credit account minted under the old value.
-         */
-        private String alias;
-
-        /** Exact {@code iss} claim value tokens from this instance carry. */
-        private String issuer;
-
-        /** Where this instance publishes its signing keys. */
-        private String jwksUri;
-
-        /**
-         * Base URL for server-to-server calls to this auth instance, e.g. marking a guest as
-         * retained. Distinct from {@link #issuer}, which is a claim value and need not be
-         * reachable, and from {@link #jwksUri}, which is a single document. Blank disables the
-         * calls for this issuer.
-         */
-        private String internalBaseUrl;
-    }
+    /**
+     * Base URL for server-to-server calls to the auth service, e.g. marking a guest as retained.
+     * Distinct from {@link #issuer}, which is a claim value and need not be reachable, and from
+     * {@link #jwksUri}, which is a single document. Blank disables the calls.
+     */
+    private String internalBaseUrl;
 }
