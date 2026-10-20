@@ -57,6 +57,15 @@ public class ChargeCreditsAspect {
         // quoted one price and charged another (and the cost table is read once, not twice).
         final int cost = creditsService.resolveCost(tool, sizeBytes);
 
+        // Idempotency-Key is the only thing standing between "retry a dropped response" and
+        // "charge the user twice". The ledger's uq(user_id, idempotency_key) does not dedupe NULLs
+        // under MySQL semantics, so a null key quietly becomes a fresh ledger row every time —
+        // reject with 400 before the tool runs rather than let the duplicate land.
+        if (cost > 0 && (idempotencyKey == null || idempotencyKey.isBlank())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Idempotency-Key header is required for this operation.");
+        }
+
         final boolean alreadyCharged = creditsService.alreadyCharged(userId, idempotencyKey);
         if (cost > 0 && !alreadyCharged) {
             // Fast pre-check. Deliberately does not create the account: a first-time user has no

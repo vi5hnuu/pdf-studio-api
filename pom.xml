@@ -104,6 +104,16 @@
 			<version>1.23.0</version>
 		</dependency>
 
+		<!-- Razorpay: INAPP credit purchases on the web tier. Order creation
+		     only; signature verification is done ourselves (timing-safe
+		     HMAC-SHA256 in RazorpaySignatures) so a change in the SDK's crypto
+		     cannot quietly weaken auth. -->
+		<dependency>
+			<groupId>com.razorpay</groupId>
+			<artifactId>razorpay-java</artifactId>
+			<version>1.4.10</version>
+		</dependency>
+
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>

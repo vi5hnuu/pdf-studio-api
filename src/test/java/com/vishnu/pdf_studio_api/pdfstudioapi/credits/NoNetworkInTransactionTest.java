@@ -6,6 +6,7 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.util.PurchaseTokens;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.AuthInternalClient;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.CreditsService;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.PlayStoreVerifier;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,12 +26,11 @@ import static org.mockito.Mockito.when;
 /**
  * Holds the line on the rule that network calls do not happen inside a database transaction.
  *
- * <p>They used to. Verifying a purchase with Google Play, and telling the auth service to retain
- * the account, both ran inside the transaction that wrote the grant — the second of them after
- * the account row had been locked. A pooled connection, and a {@code SELECT ... FOR UPDATE} row
- * lock, were therefore held for the length of an HTTP round trip. The pool holds ten connections,
- * so a slow dependency could stall every request in the application, and the RTDN webhook that
- * drives reconciliation is delivered in bursts.
+ * <p>They used to. Verifying a purchase with Google Play ran inside the transaction that wrote the
+ * grant — after the account row had been locked. A pooled connection, and a {@code SELECT ... FOR
+ * UPDATE} row lock, were therefore held for the length of an HTTP round trip. The pool holds ten
+ * connections, so a slow dependency could stall every request in the application, and the RTDN
+ * webhook that drives reconciliation is delivered in bursts.
  *
  * <p>Asserted on the real property rather than on the annotations, because that is what actually
  * matters and because a future refactor could restore the annotation without anyone noticing.
@@ -45,6 +45,13 @@ class NoNetworkInTransactionTest {
 
     @MockBean PlayStoreVerifier playStoreVerifier;
     @MockBean AuthInternalClient authInternal;
+
+    @BeforeEach
+    void callerIsNotAGuest() {
+        // purchaseCredits now gates on isGuest; a signed-in caller must appear as not-a-guest for
+        // the paths under test to reach Play at all.
+        when(authInternal.isGuest(anyString())).thenReturn(Optional.of(false));
+    }
 
     /** True if a transaction was open when Play was called. */
     private AtomicBoolean recordVerifyContext(String accountId) {
@@ -78,26 +85,6 @@ class NoNetworkInTransactionTest {
 
         assertFalse(inTransaction.get(),
                 "the webhook path held a connection across the network, and it arrives in bursts");
-    }
-
-    @Test
-    @DisplayName("claiming a purchase asks auth about the owner with no transaction open")
-    void claimAsksAuthOutsideATransaction() {
-        final String guest = "g-" + UUID.randomUUID();
-        recordVerifyContext(guest);
-        final String token = "tok-" + UUID.randomUUID();
-        creditsService.purchaseCredits(guest, token, PRODUCT, null);
-
-        final AtomicBoolean inTransaction = new AtomicBoolean(true);
-        when(authInternal.isGuest(anyString())).thenAnswer(call -> {
-            inTransaction.set(TransactionSynchronizationManager.isActualTransactionActive());
-            return Optional.of(true);
-        });
-
-        creditsService.claimPurchase("new-" + UUID.randomUUID(), token, PRODUCT, null);
-
-        assertFalse(inTransaction.get(),
-                "auth was called inside a transaction that also takes two account row locks");
     }
 
     @Test

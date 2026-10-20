@@ -51,6 +51,13 @@ public class SecurityConfig {
      */
     private static final String ADMOB_SSV_PATH = "/api/v1/credits/admob-ssv";
 
+    /**
+     * Path of the Razorpay webhook. Razorpay signs the raw body with its webhook secret
+     * ({@code X-Razorpay-Signature}), not a JWT, so the resource server's bearer filter must
+     * not see it — otherwise it would be rejected before the controller could verify the HMAC.
+     */
+    private static final String RAZORPAY_WEBHOOK_PATH = "/api/v1/credits/razorpay/webhook";
+
     private final AuthIssuerProperties authProperties;
 
     /**
@@ -64,7 +71,7 @@ public class SecurityConfig {
     @Order(1)
     public SecurityFilterChain webhookFilterChain(HttpSecurity http) throws Exception {
         return http
-                .securityMatcher(RTDN_PATH, ADMOB_SSV_PATH)
+                .securityMatcher(RTDN_PATH, ADMOB_SSV_PATH, RAZORPAY_WEBHOOK_PATH)
                 .cors(Customizer.withDefaults())
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

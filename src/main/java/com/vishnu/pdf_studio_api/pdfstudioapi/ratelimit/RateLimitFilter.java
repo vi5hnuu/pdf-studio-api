@@ -53,11 +53,14 @@ public class RateLimitFilter extends OncePerRequestFilter {
     };
 
     /**
-     * The Play RTDN webhook is exempt: it is machine-to-machine, authenticated by an OIDC
-     * token and shared secret, and throttling it would make Pub/Sub retry deliveries that
-     * were only rejected because they arrived in a burst.
+     * Machine-to-machine webhooks are exempt: they are authenticated by their own signature or
+     * shared secret, and throttling them would make the provider retry deliveries that were only
+     * rejected because they arrived in a burst.
      */
-    private static final String RTDN_PATH = "/api/v1/credits/play-rtdn";
+    private static final String[] WEBHOOK_PATHS = {
+            "/api/v1/credits/play-rtdn",
+            "/api/v1/credits/razorpay/webhook"
+    };
 
     /**
      * Tools that rasterise or convert every page. These dominate CPU and memory, so they draw on
@@ -73,7 +76,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
             "compress-pdf", "grayscale-pdf", "remove-blank-pages", "analyze-pdf",
             "optimize-pdf", "repair-pdf", "extract-images", "n-up", "redact-pdf",
             "split-by-size", "image-to-pdf", "pdf-to-json",
-            "purchase", "rewarded", "daily"
+            // Billing endpoints: each outbound Razorpay/Play API call costs real money or
+            // consumes a provider quota, and the balance mutation runs under a row lock.
+            // Draw on the tight bucket so no signed-in user can spam them.
+            "purchase", "rewarded", "daily",
+            "order", "verify"
     );
 
     private final RateLimitProperties properties;
@@ -88,7 +95,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         if (!properties.isEnabled()) return true;
         String uri = request.getRequestURI();
-        if (uri.startsWith(RTDN_PATH)) return true;
+        for (String webhook : WEBHOOK_PATHS) {
+            if (uri.startsWith(webhook)) return true;
+        }
         for (String prefix : GUARDED_PREFIXES) {
             if (uri.startsWith(prefix)) return false;
         }

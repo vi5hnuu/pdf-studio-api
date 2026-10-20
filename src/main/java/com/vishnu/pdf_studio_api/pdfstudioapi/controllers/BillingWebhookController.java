@@ -70,7 +70,8 @@ public class BillingWebhookController {
             JsonNode voided = notification.get("voidedPurchaseNotification");
             if (voided != null && voided.hasNonNull("purchaseToken")) {
                 log.info("Play RTDN: voidedPurchaseNotification accepted");
-                creditsService.revokeCreditsForToken(voided.get("purchaseToken").asText());
+                creditsService.revokeCreditsForToken(voided.get("purchaseToken").asText(),
+                        com.vishnu.pdf_studio_api.pdfstudioapi.enums.BillingChannel.PLAY);
                 return ResponseEntity.ok().build();
             }
 

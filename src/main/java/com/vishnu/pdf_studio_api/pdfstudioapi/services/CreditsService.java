@@ -235,46 +235,60 @@ public class CreditsService {
         return new GrantResult(account.getBalance(), grant);
     }
 
+    // ── Guest guard ───────────────────────────────────────────────────────────────
+
     /**
-     * Moves a guest's remaining balance onto the account they just signed in to.
+     * Refuses the call unless the caller is a real signed-in account.
      *
-     * <p>The web hands out a guest session so tools work before anyone signs in, and that
-     * guest earns the welcome and daily credits. Signing in switches the caller to a
-     * different auth instance and therefore a different account key, so without this their
-     * credits would simply vanish at the moment they created an account — the worst possible
-     * time to lose something.
+     * <p>A guest earns welcome and daily credits, which is how new users try the paid tools
+     * before signing up; they must not be able to <em>buy</em> credits or move balances between
+     * accounts. Allowing either lets a signed-out session cycle its ULID (logout → auto-mint
+     * fresh guest → +10 welcome → sign-in → transfer) and farm the opening balance; it also
+     * leaves the credits a guest paid for stranded on an id the auth service will expire. Fixing
+     * the economy at this one gate is simpler and tighter than any mitigation of transfer and
+     * purchase paths that would still allow guests to touch money.
      *
-     * <p>Idempotent: the ledger's unique {@code (user_id, idempotency_key)} means a repeated
-     * transfer of the same guest is recorded once, and the guest is drained to zero so a
-     * replay has nothing left to move.
-     *
-     * @return credits moved
+     * <p>Fail-closed: if the auth service cannot be reached to tell us the account type, this
+     * refuses the call. "Unknown" is not permission to spend real money.
      */
-    public int transferGuestBalance(String guestUserId, String targetUserId, String ip) {
-        return ledgerWriter.transferGuestBalance(guestUserId, targetUserId, ip);
+    public void requireSignedIn(String callerId) {
+        Boolean isGuest = authInternal.isGuest(callerId).orElse(null);
+        if (isGuest == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Could not confirm your account right now. Please try again.");
+        }
+        if (isGuest) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Guest accounts cannot buy credits. Sign in to continue.");
+        }
     }
 
     // ── Purchases ─────────────────────────────────────────────────────────────────
 
     /**
-     * Verifies a Google Play INAPP token and credits the purchase's owner exactly once.
+     * Verifies a Google Play INAPP token and credits the caller exactly once.
      *
-     * <p>The owner is the account Play recorded at purchase time, not whoever happens to be
-     * calling. The app attaches its user id as the obfuscated external account id, so Play is the
-     * durable record of who bought what — which matters because a session is not durable. A guest
-     * whose refresh token is rejected, or whose account the auth service purges after its expiry,
-     * silently becomes a different principal; binding the grant to the caller meant the credits
-     * landed on whichever identity happened to be live at redemption.
+     * <p>Only signed-in accounts may buy. Guests earn via welcome/daily/rewarded only; letting
+     * them pay for credits leaves the balance on an id the auth service will expire, and letting
+     * a signed-in user claim an abandoned guest's purchase was the lever a logout-login cycle
+     * used to farm welcome grants. See {@link #requireSignedIn}.
+     *
+     * <p>The caller is now the owner by construction. Play's obfuscated external account id is
+     * still consulted as a sanity check — if present it must equal the caller — but the fallback
+     * to "whoever is calling" is intentional, because the caller is the signed-in subject the
+     * {@code purchases.products} verification just succeeded for.
      *
      * <p>Never throws CONFLICT for an already-granted token. It used to, and the client read that
      * as "the credits exist" and consumed the purchase — so a redelivered purchase belonging to a
-     * previous identity was spent and could never be redelivered again. The response now says who
-     * was credited and lets the caller decide.
+     * previous identity was spent and could never be redelivered again. The response now reports
+     * the state and lets the client decide.
      */
     // Deliberately NOT @Transactional. Verifying with Play is a network round trip, and holding
     // a pooled connection across it — then a row lock, once the account is locked — is how a slow
     // dependency stalls the whole application. The write below owns its own short transaction.
     public PurchaseOutcome purchaseCredits(String callerId, String purchaseToken, String productId, String ip) {
+        requireSignedIn(callerId);
+
         if (purchaseToken == null || purchaseToken.length() > MAX_PURCHASE_TOKEN_LENGTH) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid purchase token.");
         }
@@ -294,106 +308,48 @@ public class CreditsService {
 
         var result = playStoreVerifier.verifyInAppPurchase(productId, purchaseToken);
         if (!result.valid()) {
-            ledgerWriter.recordVerificationFailure(callerId, purchaseToken, productId, ip);
+            ledgerWriter.recordVerificationFailureIfFirst(callerId, purchaseToken, productId, ip,
+                    BillingChannel.PLAY);
             throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
                     "Google Play could not verify this purchase.");
         }
 
-        // Falls back to the caller when Play reports no usable account id: an older client that
-        // attached none, or one that attached something that is not an id this service issues.
-        // The value is client-supplied, so it is checked rather than trusted — see
-        // PrincipalKey.isValidSubject. Crediting the caller is the safe fallback either way,
-        // because the caller is the one holding a verified token. reconcilePurchase cannot make
-        // the same allowance: it has no caller.
-        final String owner = ownerFromPlay(result.accountId()).orElse(callerId);
+        // If Play reports an obfuscated external account id, it must match the caller — a signed-in
+        // user cannot pay with one account and credit another. When Play reports none (older client
+        // builds), the caller is already the only reasonable owner because the token verified under
+        // the authenticated session.
+        final String playOwner = ownerFromPlay(result.accountId()).orElse(callerId);
+        if (!playOwner.equals(callerId)) {
+            log.warn("Play purchase owner {} differs from caller {} for product {}; refusing.",
+                    playOwner, callerId, productId);
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "This purchase was bound to a different account.");
+        }
 
-        final int ownerBalance;
+        final int balanceAfter;
         try {
-            ownerBalance = ledgerWriter.grantPurchase(
-                    owner, purchaseToken, productId, result.orderId(), creditsToAdd, ip,
+            balanceAfter = ledgerWriter.grantPurchase(
+                    callerId, purchaseToken, productId, result.orderId(), creditsToAdd, ip,
                     BillingChannel.PLAY);
         } catch (DataIntegrityViolationException dup) {
             // The RTDN webhook won the race on uq(user_id, "purchase:<token>") in credit_ledger.
-            // The credits are already on the owner's account — read the current balance and
-            // return the same shape the "already granted" early-exit above uses, so the client
-            // sees a success outcome instead of a 500 "buy failed" toast.
+            // The credits are already on the account — read the current balance and return the
+            // same shape the "already granted" early-exit above uses, so the client sees a success
+            // outcome instead of a 500 "buy failed" toast.
             //
             // The catch MUST live out here, not inside grantPurchase: Hibernate marks the
             // transaction rollback-only on the constraint violation, so swallowing it inside
             // @Transactional makes Spring throw UnexpectedRollbackException at commit time.
             // Keeping the exception on the way out lets Spring roll back cleanly.
-            final boolean toCaller = owner.equals(callerId);
             final int callerBalance = getBalance(callerId, ip);
-            log.info("Purchase {} was already granted (concurrent writer won); owner={} caller={} callerBalance={}",
-                    purchaseToken, owner, callerId, callerBalance);
-            return new PurchaseOutcome(callerBalance, 0, true, toCaller);
+            log.info("Purchase {} was already granted (concurrent writer won); caller={} balance={}",
+                    purchaseToken, callerId, callerBalance);
+            return new PurchaseOutcome(callerBalance, 0, true, true);
         }
 
-        // A guest that has paid must outlive the auth service's guest expiry, or its credits are
-        // orphaned when the account is purged. Non-blocking; see AuthInternalClient.retain.
-        authInternal.retain(owner);
-
-        log.info("Credits purchased: owner={} caller={} product={} +{} balance={}",
-                owner, callerId, productId, creditsToAdd, ownerBalance);
-        final boolean toCaller = owner.equals(callerId);
-        return new PurchaseOutcome(toCaller ? ownerBalance : getBalance(callerId, ip),
-                creditsToAdd, false, toCaller);
-    }
-
-    /**
-     * Moves a purchase's credits to the caller when the account that owns them is an abandoned
-     * guest.
-     *
-     * <p>For the case the rest of this class cannot fix on its own: a guest's session is gone —
-     * its refresh token rejected, or the account purged by the auth service's guest expiry — so
-     * the app is now a different principal, and the credits it paid for sit on an identity it can
-     * no longer authenticate as. Play still reports the purchase, which is the one durable link
-     * back to the original account.
-     *
-     * <p>Only an anonymous owner may be claimed. Holding a Play purchase token proves you are the
-     * Google account that bought it, which is fair grounds to reclaim an <em>anonymous</em>
-     * entitlement and no grounds at all to take over a real one: two people share a device, the
-     * second signs in, and nothing they can present should move the first person's credits. A
-     * full-account owner is therefore refused, and so is an owner whose type cannot be
-     * established — unknown is not permission.
-     *
-     * @return credits moved; 0 when there was nothing to move
-     */
-    // Not @Transactional: verifying with Play and asking auth what kind of account owns the
-    // purchase are both network calls, and the transfer below owns its own transaction.
-    public int claimPurchase(String callerId, String purchaseToken, String productId, String ip) {
-        if (purchaseToken == null || purchaseToken.length() > MAX_PURCHASE_TOKEN_LENGTH) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid purchase token.");
-        }
-        var granted = purchaseAuditLogRepository.findFirstByTokenHashAndStatus(
-                PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED);
-        if (granted.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
-                    "No redeemed purchase matches this token.");
-        }
-        final String owner = granted.get().getUserId();
-        if (owner.equals(callerId)) return 0; // already yours
-
-        // The token has to be real and still valid, or anyone could claim against a made-up one.
-        var result = playStoreVerifier.verifyInAppPurchase(productId, purchaseToken);
-        if (!result.valid()) {
-            throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
-                    "Google Play could not verify this purchase.");
-        }
-
-        if (!authInternal.isGuest(owner).orElse(false)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                    "This purchase belongs to a registered account. Sign in to that account to use its credits.");
-        }
-
-        // Same mechanics as signing in: drain the guest, credit the target, once.
-        int moved = ledgerWriter.transferGuestBalance(owner, callerId, ip);
-        if (moved > 0) {
-            authInternal.retain(callerId);
-            log.info("Purchase claimed: {} credit(s) moved from abandoned guest {} to {}",
-                    moved, owner, callerId);
-        }
-        return moved;
+        log.info("Credits purchased: user={} product={} +{} balance={}",
+                callerId, productId, creditsToAdd, balanceAfter);
+        return new PurchaseOutcome(balanceAfter, creditsToAdd, false, true);
     }
 
     /**
@@ -437,6 +393,23 @@ public class CreditsService {
         }
 
         final String userId = owner.get();
+
+        // Mirror the user-initiated purchase policy: guests may not buy. A guest's Play purchase
+        // that reaches the RTDN path means the Android client allowed a buy from an anonymous
+        // session; the server refuses it rather than silently land credits on an id the auth
+        // service will purge. The Pub/Sub delivery is still acked so this does not retry forever;
+        // the audit trail is in the log, and support can refund manually. isGuest is cached, so
+        // repeated deliveries do not hammer the auth service.
+        Boolean isGuest = authInternal.isGuest(userId).orElse(null);
+        if (isGuest == null) {
+            log.warn("RTDN purchase from userId={} skipped: could not confirm account type with auth.", userId);
+            return;
+        }
+        if (isGuest) {
+            log.warn("RTDN purchase from userId={} refused: guest accounts may not buy credits.", userId);
+            return;
+        }
+
         try {
             ledgerWriter.grantPurchase(userId, purchaseToken, productId, result.orderId(), credits, null,
                     BillingChannel.PLAY);
@@ -447,27 +420,32 @@ public class CreditsService {
             // turn into UnexpectedRollbackException. See grantPurchase's javadoc.
             log.info("RTDN purchase was already granted by a concurrent writer; userId={} product={}",
                     userId, productId);
-            authInternal.retain(userId);
             return;
         }
-        authInternal.retain(userId);
 
         log.info("Reconciled unredeemed purchase from RTDN: userId={} product={} +{}",
                 userId, productId, credits);
     }
 
     /**
-     * Claws back a refunded/voided purchase's credits. Idempotent; balance may go negative.
+     * Claws back a refunded/voided purchase's credits, exactly once, through either channel.
      *
-     * <p>Driven by an RTDN in real time, and by the nightly sweep for anything that never arrived.
+     * <p>Idempotent on the audit row's {@code (token_hash, CREDITS_REVOKED)} unique constraint
+     * and on the ledger's {@code (user_id, "revoke:<token>")} key, so RTDN redeliveries and
+     * nightly-sweep passes converge on one revocation. Balance may go negative when a user has
+     * already spent part of the pack they are now refunded.
+     *
+     * <p>The {@code channel} is the provider initiating the revocation (PLAY for a Google void,
+     * RAZORPAY for a Razorpay refund). It is recorded on the clawback row so reporting can split
+     * refunds by provider.
      *
      * @return true when this call actually revoked something, so a caller can report what it did
      */
     @Transactional
-    public boolean revokeCreditsForToken(String purchaseToken) {
+    public boolean revokeCreditsForToken(String purchaseToken, BillingChannel channel) {
         if (purchaseToken == null || purchaseToken.isBlank()) return false;
         if (purchaseAuditLogRepository.existsByTokenHashAndStatus(PurchaseTokens.hash(purchaseToken), PurchaseStatus.CREDITS_REVOKED)) {
-            return false; // already handled (RTDN is at-least-once)
+            return false; // already handled (webhook delivery is at-least-once)
         }
         var grantedOpt = purchaseAuditLogRepository.findFirstByTokenHashAndStatus(
                 PurchaseTokens.hash(purchaseToken), PurchaseStatus.GRANTED);
@@ -481,10 +459,11 @@ public class CreditsService {
         CreditAccount account = accountRepository.findForUpdate(granted.getUserId()).orElse(null);
         if (account == null) return false;
         ledgerWriter.applyDelta(account, -amount, CreditReason.REVOKE, null,
-                PurchaseTokens.ledgerKey("revoke", purchaseToken), null, BillingChannel.PLAY);
+                PurchaseTokens.ledgerKey("revoke", purchaseToken), null, channel);
         ledgerWriter.saveAudit(granted.getUserId(), purchaseToken, granted.getOrderId(), granted.getProductId(),
-                PurchaseStatus.CREDITS_REVOKED, null, null, BillingChannel.PLAY);
-        log.info("Credits revoked (refund/void): userId={} product={} -{} balance={}",
+                PurchaseStatus.CREDITS_REVOKED, null, null, channel);
+        log.info("Credits revoked ({}): userId={} product={} -{} balance={}",
+                channel == null ? "unknown" : channel.code(),
                 granted.getUserId(), granted.getProductId(), amount, account.getBalance());
         return true;
     }

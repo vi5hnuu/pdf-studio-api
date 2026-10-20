@@ -89,9 +89,35 @@ public class IpGrantGuard {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(
-                    digest.digest((salt + "|" + ip).getBytes(StandardCharsets.UTF_8)));
+                    digest.digest((salt + "|" + normalizeForBucket(ip)).getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
+    /**
+     * Collapses an IPv6 address to its /64 prefix before bucketing.
+     *
+     * <p>Mobile carriers delegate a /64 or larger to each device, and clients can rotate through
+     * the host portion of their delegation trivially — flipping that half of the address is
+     * enough to look like a brand-new client on every request. Counting against the /64 keeps
+     * the "one bucket per real user network" invariant. IPv4 is unchanged (every IPv4 address is
+     * its own bucket already).
+     *
+     * <p>Malformed input is returned verbatim; the IP has already passed through
+     * {@link com.vishnu.pdf_studio_api.pdfstudioapi.util.ClientIp}, which only yields what the
+     * container peer or a trusted proxy supplied, so a nonsense value here is a bug upstream.
+     */
+    private String normalizeForBucket(String ip) {
+        if (ip == null || ip.indexOf(':') < 0) return ip; // IPv4 or empty — leave alone
+        try {
+            byte[] addr = java.net.InetAddress.getByName(ip).getAddress();
+            if (addr.length != 16) return ip; // IPv4-mapped shows up as 4 bytes; keep as-is
+            byte[] prefix = new byte[16];
+            System.arraycopy(addr, 0, prefix, 0, 8); // top /64, bottom bytes already zero
+            return java.net.InetAddress.getByAddress(prefix).getHostAddress() + "/64";
+        } catch (java.net.UnknownHostException unparseable) {
+            return ip;
         }
     }
 }

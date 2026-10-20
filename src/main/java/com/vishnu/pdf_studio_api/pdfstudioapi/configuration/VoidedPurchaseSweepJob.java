@@ -1,5 +1,6 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.configuration;
 
+import com.vishnu.pdf_studio_api.pdfstudioapi.enums.BillingChannel;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.CreditsService;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.PlayStoreVerifier;
 import lombok.RequiredArgsConstructor;
@@ -51,7 +52,7 @@ public class VoidedPurchaseSweepJob {
         for (String token : tokens) {
             try {
                 // Each in its own transaction, so one bad token cannot abandon the rest.
-                if (creditsService.revokeCreditsForToken(token)) revoked++;
+                if (creditsService.revokeCreditsForToken(token, BillingChannel.PLAY)) revoked++;
             } catch (Exception e) {
                 log.error("Voided-purchase sweep could not revoke a token: {}", e.getMessage());
             }
