@@ -63,6 +63,9 @@ class WebPayloadContractTest {
         var request = multipart("/api/v1/pdf-studio/" + path).file(file("file", pdf(4)));
         if (infoPart != null) request = request.file(part(infoPart, json));
         for (MockMultipartFile f : extra) request = request.file(f);
+        // Idempotency-Key is required by @ChargeCredits endpoints — the ledger's
+        // uq(user_id, idempotency_key) does not dedupe NULLs under MySQL semantics.
+        request.header("Idempotency-Key", "test-" + java.util.UUID.randomUUID());
 
         MvcResult result = mockMvc.perform(request.with(user()).with(fromUniqueIp())).andReturn();
         assertEquals(200, result.getResponse().getStatus(),

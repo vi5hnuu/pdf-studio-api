@@ -55,11 +55,20 @@ public class CreditLedgerWriter {
      * Applies a signed delta to the locked account and writes the matching ledger row.
      *
      * <p>{@code channel} says which payment provider funded a billing movement (play, razorpay,
-     * admin); pass null for non-billing flows (daily, rewarded_ad, debit, transfer) — the
-     * {@code reason} is sufficient on its own.
+     * admin); pass null for non-billing flows (daily, rewarded_ad, debit) — the {@code reason} is
+     * sufficient on its own.
+     *
+     * <p>{@code idempotencyKey} is required: the ledger's uq(user_id, idempotency_key) does not
+     * dedupe NULLs under MySQL semantics, so a null key quietly becomes a fresh row on every
+     * retry. The precondition fails fast at every call site rather than wait for a double-write
+     * to show up in a reporting query.
      */
     public void applyDelta(CreditAccount account, int delta, CreditReason reason,
                            String toolId, String idempotencyKey, String ip, BillingChannel channel) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new IllegalArgumentException(
+                    "idempotencyKey is required for every ledger row — null disables deduplication.");
+        }
         account.setBalance(account.getBalance() + delta);
         accountRepository.save(account);
         ledgerRepository.save(CreditLedger.builder()
@@ -125,64 +134,21 @@ public class CreditLedgerWriter {
         return account.getBalance();
     }
 
-    /** Records that Play refused a token, once, so repeated attempts leave one row. */
+    /**
+     * Records that a billing provider refused a token, at most once, so repeated attempts leave
+     * one row. Takes the channel so the audit trail says whether Play or Razorpay rejected the
+     * payment — otherwise the two provider's failures become indistinguishable in reporting.
+     */
     @Transactional
-    public void recordVerificationFailure(String userId, String purchaseToken, String productId, String ip) {
+    public void recordVerificationFailureIfFirst(String userId, String purchaseToken,
+                                                 String productId, String ip,
+                                                 BillingChannel channel) {
         if (purchaseAuditLogRepository.existsByTokenHashAndStatus(
                 PurchaseTokens.hash(purchaseToken), PurchaseStatus.VERIFICATION_FAILED)) {
             return;
         }
         saveAudit(userId, purchaseToken, null, productId, PurchaseStatus.VERIFICATION_FAILED, null, ip,
-                BillingChannel.PLAY);
+                channel);
     }
 
-    /**
-     * Moves a guest's whole balance to another account, once.
-     *
-     * <p>Idempotent twice over: the ledger's unique {@code (user_id, idempotency_key)} records a
-     * repeated transfer once, and the guest is drained to zero so a replay has nothing to move.
-     *
-     * @return credits moved
-     */
-    @Transactional
-    public int transferGuestBalance(String guestUserId, String targetUserId, String ip) {
-        if (guestUserId == null || guestUserId.equals(targetUserId)) return 0;
-
-        final String key = "guest-transfer:" + guestUserId;
-
-        // Both cheap checks first, without taking a lock: already moved (a retried sign-in or
-        // claim), or no such guest to move anything from. Neither reads a balance — the locked
-        // read below is the only authority on that.
-        if (ledgerRepository.existsByUserIdAndIdempotencyKey(targetUserId, key)) return 0;
-        if (!accountRepository.existsById(guestUserId)) return 0;
-
-        accountService.ensure(targetUserId, ip);
-
-        // Locked in a fixed order by key, not source-then-target. This is the only operation
-        // that holds two account locks, and a claim runs guest-to-guest, so "drain first, credit
-        // second" would let two opposite claims take the same pair of locks in opposite orders
-        // and deadlock — the way concurrent first requests deadlocked the per-IP counter. A total
-        // order removes the possibility instead of making it unlikely.
-        final CreditAccount guestAccount;
-        final CreditAccount target;
-        if (guestUserId.compareTo(targetUserId) < 0) {
-            guestAccount = lockAccount(guestUserId);
-            target = lockAccount(targetUserId);
-        } else {
-            target = lockAccount(targetUserId);
-            guestAccount = lockAccount(guestUserId);
-        }
-
-        // Read only now that the row is locked. A concurrent transfer of the same guest waits
-        // here and then finds nothing left, which is what keeps the transfer single — the
-        // unique ledger key is the backstop, not the mechanism.
-        final int amount = guestAccount.getBalance();
-        if (amount <= 0) return 0;
-
-        applyDelta(guestAccount, -amount, CreditReason.TRANSFER, null, key, ip, null);
-        applyDelta(target, amount, CreditReason.TRANSFER, null, key, ip, null);
-
-        log.info("Transferred {} credit(s) from guest {} to {}", amount, guestUserId, targetUserId);
-        return amount;
-    }
 }

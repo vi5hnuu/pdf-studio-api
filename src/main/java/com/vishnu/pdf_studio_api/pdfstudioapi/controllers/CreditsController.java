@@ -1,8 +1,6 @@
 package com.vishnu.pdf_studio_api.pdfstudioapi.controllers;
 
-import com.vishnu.pdf_studio_api.pdfstudioapi.exception.ApiException;
 import com.vishnu.pdf_studio_api.pdfstudioapi.security.CurrentUser;
-import com.vishnu.pdf_studio_api.pdfstudioapi.security.IssuerTokenDecoders;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.AdMobSsvVerifier;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.CreditsService;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.ClientIp;
@@ -27,7 +25,6 @@ import java.util.Map;
 public class CreditsController {
 
     private final CreditsService creditsService;
-    private final IssuerTokenDecoders issuerTokenDecoders;
     private final AdMobSsvVerifier ssvVerifier;
 
     @GetMapping("/balance")
@@ -62,32 +59,6 @@ public class CreditsController {
         return ResponseEntity.ok(Map.of("success", true, "data", result));
     }
 
-    /**
-     * Carries a guest's remaining credits onto the account the caller just signed in to.
-     *
-     * <p>The web works anonymously until someone signs in, and that guest session earns the
-     * welcome and daily credits. Signing in moves the caller to a different auth instance and
-     * therefore a different account, so without this their balance would disappear at exactly
-     * the moment they created an account.
-     *
-     * <p>The guest's own access token is the proof of ownership — it is validated here, not
-     * trusted — and the transfer is idempotent.
-     */
-    @PostMapping("/transfer-guest")
-    public ResponseEntity<Map<String, Object>> transferGuest(@RequestBody Map<String, String> body,
-                                                             HttpServletRequest request) {
-        String guestSubject = issuerTokenDecoders.subjectOf(body.get("guestToken"))
-                .orElseThrow(() -> ApiException.badRequest("That guest session is no longer valid."));
-
-        int moved = creditsService.transferGuestBalance(
-                guestSubject, CurrentUser.requireId(), ClientIp.of(request));
-
-        return ResponseEntity.ok(Map.of("success", true,
-                "message", moved > 0 ? "Your credits have been moved to your account." : "Nothing to move.",
-                "data", Map.of("transferred", moved,
-                        "credits", creditsService.getBalance(CurrentUser.requireId(), ClientIp.of(request)))));
-    }
-
     @PostMapping("/purchase")
     public ResponseEntity<Map<String, Object>> purchase(@RequestBody Map<String, String> body,
                                                         HttpServletRequest request) {
@@ -96,33 +67,16 @@ public class CreditsController {
         var outcome = creditsService.purchaseCredits(
                 CurrentUser.requireId(), token, productId, ClientIp.of(request));
         // "credits" stays the caller's balance, which is what every client reads, so an older
-        // build keeps working. The two flags are what let a newer one tell an idempotent replay
-        // from a purchase that belongs to a different account — a distinction it previously had
-        // to guess at from a 409, and guessed wrong.
+        // build keeps working. The flags let a newer one tell an idempotent replay from a fresh
+        // grant — a distinction it previously had to guess at from a 409, and guessed wrong.
         return ResponseEntity.ok(Map.of(
                 "success", true,
-                "message", outcome.creditedToCaller() ? "Credits added." : "This purchase belongs to another account.",
+                "message", "Credits added.",
                 "data", Map.of(
                         "credits", outcome.callerBalance(),
                         "creditsGranted", outcome.creditsGranted(),
                         "alreadyGranted", outcome.alreadyGranted(),
                         "creditedToCaller", outcome.creditedToCaller())));
-    }
-
-    /**
-     * Recovers a purchase whose owning session the caller has lost.
-     *
-     * <p>Only ever moves credits from an abandoned <em>guest</em>; see
-     * {@link CreditsService#claimPurchase}.
-     */
-    @PostMapping("/claim-purchase")
-    public ResponseEntity<Map<String, Object>> claimPurchase(@RequestBody Map<String, String> body,
-                                                             HttpServletRequest request) {
-        int moved = creditsService.claimPurchase(CurrentUser.requireId(),
-                body.get("purchaseToken"), body.get("productId"), ClientIp.of(request));
-        return ResponseEntity.ok(Map.of("success", true,
-                "message", moved > 0 ? "Credits restored." : "Nothing to restore.",
-                "data", Map.of("creditsMoved", moved)));
     }
 
     /**

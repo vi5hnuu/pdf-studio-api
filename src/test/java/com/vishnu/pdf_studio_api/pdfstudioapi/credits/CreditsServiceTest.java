@@ -5,19 +5,25 @@ import com.vishnu.pdf_studio_api.pdfstudioapi.model.CreditLedger;
 import com.vishnu.pdf_studio_api.pdfstudioapi.model.PurchaseAuditLog;
 import com.vishnu.pdf_studio_api.pdfstudioapi.repository.CreditLedgerRepository;
 import com.vishnu.pdf_studio_api.pdfstudioapi.repository.PurchaseAuditLogRepository;
+import com.vishnu.pdf_studio_api.pdfstudioapi.services.AuthInternalClient;
 import com.vishnu.pdf_studio_api.pdfstudioapi.services.CreditsService;
 import com.vishnu.pdf_studio_api.pdfstudioapi.util.PurchaseTokens;
 import jakarta.persistence.Column;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
 /** Covers the money-handling paths: debits, idempotency, and purchase-token identity. */
 @SpringBootTest
@@ -26,6 +32,15 @@ class CreditsServiceTest {
     @Autowired CreditsService creditsService;
     @Autowired CreditLedgerRepository ledgerRepository;
     @Autowired PurchaseAuditLogRepository purchaseAuditLogRepository;
+
+    @MockBean AuthInternalClient authInternal;
+
+    @BeforeEach
+    void callerIsNotAGuest() {
+        // purchaseCredits gates on isGuest; a signed-in caller must appear as not-a-guest for
+        // the token-length guard under test to be reached at all.
+        when(authInternal.isGuest(anyString())).thenReturn(Optional.of(false));
+    }
 
     private String newUser() {
         return "u-" + UUID.randomUUID().toString().substring(0, 8);
@@ -39,7 +54,7 @@ class CreditsServiceTest {
         assertTrue(opening > 0, "welcome grant should seed a balance");
 
         // grayscale-pdf is seeded at 1 credit.
-        var result = creditsService.charge(user, "grayscale-pdf", 0L, null, null);
+        var result = creditsService.charge(user, "grayscale-pdf", 0L, "k-" + user, null);
         assertEquals(1, result.charged());
         assertEquals(opening - 1, result.balanceRemaining());
         assertEquals(opening - 1, creditsService.getBalance(user, null));
@@ -76,7 +91,7 @@ class CreditsServiceTest {
         assertEquals(0, creditsService.getBalance(user, null));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> creditsService.charge(user, "grayscale-pdf", 0L, null, null));
+                () -> creditsService.charge(user, "grayscale-pdf", 0L, "short-" + user, null));
         assertEquals(HttpStatus.PAYMENT_REQUIRED, ex.getStatusCode());
     }
 
@@ -169,49 +184,6 @@ class CreditsServiceTest {
         assertTrue(row.isPresent(), "a debit must leave an audit trail");
         assertEquals(-1, row.get().getDelta());
         assertEquals(result.balanceRemaining(), row.get().getBalanceAfter());
-    }
-
-    @Test
-    @DisplayName("a guest's credits move to the account they sign in to")
-    void transfersGuestBalance() {
-        String guest = UUID.randomUUID().toString();
-        String account = UUID.randomUUID().toString();
-
-        int guestOpening = creditsService.getBalance(guest, null);
-        int accountOpening = creditsService.getBalance(account, null);
-        assertTrue(guestOpening > 0, "the guest should have earned its welcome credits");
-
-        int moved = creditsService.transferGuestBalance(guest, account, null);
-
-        assertEquals(guestOpening, moved);
-        assertEquals(0, creditsService.getBalance(guest, null), "the guest is drained");
-        assertEquals(accountOpening + guestOpening, creditsService.getBalance(account, null));
-    }
-
-    @Test
-    @DisplayName("signing in twice does not move the credits twice")
-    void transferIsIdempotent() {
-        String guest = UUID.randomUUID().toString();
-        String account = UUID.randomUUID().toString();
-        creditsService.getBalance(guest, null);
-        int accountOpening = creditsService.getBalance(account, null);
-
-        int first = creditsService.transferGuestBalance(guest, account, null);
-        int second = creditsService.transferGuestBalance(guest, account, null);
-
-        assertTrue(first > 0);
-        assertEquals(0, second, "a repeated transfer moves nothing");
-        assertEquals(accountOpening + first, creditsService.getBalance(account, null));
-    }
-
-    @Test
-    @DisplayName("transferring to the same account, or from an empty guest, is a no-op")
-    void transferNoOps() {
-        String account = UUID.randomUUID().toString();
-        creditsService.getBalance(account, null);
-
-        assertEquals(0, creditsService.transferGuestBalance(account, account, null));
-        assertEquals(0, creditsService.transferGuestBalance("never-seen-" + UUID.randomUUID(), account, null));
     }
 
     @Test
